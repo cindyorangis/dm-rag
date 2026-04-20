@@ -1,36 +1,35 @@
-'use client'
+"use client";
 
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Session = {
-  id: string
-  title: string
-  created_at: string
-  status: 'active' | 'complete'
-  journal_entry: string | null
-}
+  id: string;
+  title: string;
+  created_at: string;
+  status: "active" | "complete";
+  journal_entry: string | null;
+};
 
 export default function JournalPage() {
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/sessions')
+    fetch("/api/sessions")
       .then((r) => r.json())
       .then(({ sessions, error }) => {
-        if (error) throw new Error(error)
-        setSessions(sessions)
+        if (error) throw new Error(error);
+        setSessions(sessions);
       })
       .catch((err) => setError(err.message))
-      .finally(() => setLoading(false))
-  }, [])
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 px-4 py-12">
       <div className="max-w-2xl mx-auto space-y-10">
-
         {/* Header */}
         <div className="space-y-1">
           <Link
@@ -49,16 +48,18 @@ export default function JournalPage() {
 
         {/* States */}
         {loading && (
-          <p className="text-stone-500 text-sm italic">Consulting the archives...</p>
+          <p className="text-stone-500 text-sm italic">
+            Consulting the archives...
+          </p>
         )}
 
-        {error && (
-          <p className="text-red-400 text-sm">{error}</p>
-        )}
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         {!loading && !error && sessions.length === 0 && (
           <div className="text-center py-20 space-y-3">
-            <p className="text-stone-500 italic font-serif">No adventures recorded yet.</p>
+            <p className="text-stone-500 italic font-serif">
+              No adventures recorded yet.
+            </p>
             <Link
               href="/"
               className="inline-block text-amber-600 hover:text-amber-400 text-sm transition-colors"
@@ -72,7 +73,7 @@ export default function JournalPage() {
         <ul className="space-y-4">
           {sessions.map((session) => (
             <li key={session.id}>
-              {session.status === 'complete' ? (
+              {session.status === "complete" ? (
                 <Link href={`/journal/${session.id}`}>
                   <SessionCard session={session} />
                 </Link>
@@ -84,22 +85,21 @@ export default function JournalPage() {
             </li>
           ))}
         </ul>
-
       </div>
     </div>
-  )
+  );
 }
 
 function SessionCard({ session }: { session: Session }) {
-  const date = new Date(session.created_at).toLocaleDateString('en-CA', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  const date = new Date(session.created_at).toLocaleDateString("en-CA", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 
   const excerpt = session.journal_entry
-    ? session.journal_entry.slice(0, 160).trimEnd() + '...'
-    : null
+    ? session.journal_entry.slice(0, 160).trimEnd() + "..."
+    : null;
 
   return (
     <div className="group border border-stone-800 hover:border-amber-800 bg-stone-900 hover:bg-stone-900/80 rounded-lg px-5 py-4 transition-colors cursor-pointer">
@@ -120,19 +120,17 @@ function SessionCard({ session }: { session: Session }) {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
-function StatusBadge({ status }: { status: 'active' | 'complete' }) {
-  if (status === 'active') {
+function StatusBadge({ status }: { status: "active" | "complete" }) {
+  if (status === "active") {
     return (
       <span className="flex items-center gap-1 text-xs text-emerald-500">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
         In progress
       </span>
-    )
+    );
   }
-  return (
-    <span className="text-xs text-stone-600">Complete</span>
-  )
+  return <span className="text-xs text-stone-600">Complete</span>;
 }

@@ -1,66 +1,66 @@
-'use client'
+"use client";
 
-import { useParams, useRouter } from 'next/navigation'
-import { useChat } from '@/hooks/useChat'
-import { useEffect, useRef, useState } from 'react'
+import { useParams, useRouter } from "next/navigation";
+import { useChat } from "@/hooks/useChat";
+import { useEffect, useRef, useState } from "react";
 
 export default function SessionPage() {
-  const { id } = useParams<{ id: string }>()
-  const router = useRouter()  // ← add this
-  const { messages, isStreaming, error, sendMessage, cancelStream } = useChat(id)
-  const [input, setInput] = useState('')
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter(); // ← add this
+  const { messages, isStreaming, error, sendMessage, cancelStream } =
+    useChat(id);
+  const [input, setInput] = useState("");
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-const endSession = async () => {
-  if (isStreaming) return
-  
-  try {
-    // Generate journal entry
-    await fetch('/api/journal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: id, messages }),
-    })
-    router.push(`/journal/${id}`)
-  } catch (err) {
-    console.error('Failed to end session:', err)
-  }
-}
+  const endSession = async () => {
+    if (isStreaming) return;
+
+    try {
+      // Generate journal entry
+      await fetch("/api/journal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: id, messages }),
+      });
+      router.push(`/journal/${id}`);
+    } catch (err) {
+      console.error("Failed to end session:", err);
+    }
+  };
 
   // Auto-scroll to bottom on new tokens
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleSubmit = async () => {
-    const trimmed = input.trim()
-    if (!trimmed) return
-    setInput('')
-    await sendMessage(trimmed)
-  }
+    const trimmed = input.trim();
+    if (!trimmed) return;
+    setInput("");
+    await sendMessage(trimmed);
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
     }
-  }
+  };
 
   return (
     <div className="flex flex-col h-screen bg-stone-950 text-stone-100">
-
-        <div className="border-b border-stone-800 px-4 py-3 flex justify-between items-center">
-  <h1 className="font-serif text-amber-400 text-sm tracking-widest uppercase">
-    Lost Mine of Phandelver
-  </h1>
-  <button
-    onClick={endSession}
-    disabled={isStreaming || messages.length === 0}
-    className="text-stone-500 hover:text-stone-300 text-xs disabled:opacity-30 transition-colors"
-  >
-    End Session →
-  </button>
-</div>
+      <div className="border-b border-stone-800 px-4 py-3 flex justify-between items-center">
+        <h1 className="font-serif text-amber-400 text-sm tracking-widest uppercase">
+          Lost Mine of Phandelver
+        </h1>
+        <button
+          onClick={endSession}
+          disabled={isStreaming || messages.length === 0}
+          className="text-stone-500 hover:text-stone-300 text-xs disabled:opacity-30 transition-colors"
+        >
+          End Session →
+        </button>
+      </div>
       {/* Message list */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
@@ -73,10 +73,10 @@ const endSession = async () => {
           <div
             key={msg.id}
             className={`max-w-2xl mx-auto ${
-              msg.role === 'user' ? 'text-right' : 'text-left'
+              msg.role === "user" ? "text-right" : "text-left"
             }`}
           >
-            {msg.role === 'assistant' ? (
+            {msg.role === "assistant" ? (
               <div className="prose prose-invert prose-stone max-w-none font-serif text-stone-200 leading-relaxed">
                 {msg.content}
                 {msg.streaming && (
@@ -91,9 +91,7 @@ const endSession = async () => {
           </div>
         ))}
 
-        {error && (
-          <p className="text-center text-red-400 text-sm">{error}</p>
-        )}
+        {error && <p className="text-center text-red-400 text-sm">{error}</p>}
 
         <div ref={bottomRef} />
       </div>
@@ -129,5 +127,5 @@ const endSession = async () => {
         </div>
       </div>
     </div>
-  )
+  );
 }

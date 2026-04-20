@@ -1,20 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY!
-)
+  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY!,
+);
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
-const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || 'llama3'
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3";
 
 function buildJournalPrompt(
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
 ): string {
   const transcript = messages
-    .map((m) => `${m.role === 'user' ? 'PLAYER' : 'DUNGEON MASTER'}: ${m.content}`)
-    .join('\n\n')
+    .map(
+      (m) => `${m.role === "user" ? "PLAYER" : "DUNGEON MASTER"}: ${m.content}`,
+    )
+    .join("\n\n");
 
   return `You are a scribe chronicling the adventures of a brave hero in the Forgotten Realms.
 
@@ -31,63 +33,63 @@ Guidelines:
 SESSION TRANSCRIPT:
 ${transcript}
 
-Write the journal entry now:`
+Write the journal entry now:`;
 }
 
 async function generateJournalEntry(
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
 ): Promise<string> {
-  const prompt = buildJournalPrompt(messages)
+  const prompt = buildJournalPrompt(messages);
 
   const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: CHAT_MODEL,
       stream: false,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: "user", content: prompt }],
     }),
-  })
+  });
 
-  if (!res.ok) throw new Error(`Ollama request failed: ${res.statusText}`)
+  if (!res.ok) throw new Error(`Ollama request failed: ${res.statusText}`);
 
-  const data = await res.json()
-  return data.message?.content ?? ''
+  const data = await res.json();
+  return data.message?.content ?? "";
 }
 
 async function markSessionComplete(sessionId: string, journalEntry: string) {
   const { error } = await supabase
-    .from('sessions')
-    .update({ status: 'complete', journal_entry: journalEntry })
-    .eq('id', sessionId)
+    .from("sessions")
+    .update({ status: "complete", journal_entry: journalEntry })
+    .eq("id", sessionId);
 
-  if (error) throw new Error(`Failed to save journal: ${error.message}`)
+  if (error) throw new Error(`Failed to save journal: ${error.message}`);
 }
 
 // POST /api/journal
 export async function POST(req: NextRequest) {
   try {
-    const { sessionId, messages } = await req.json()
+    const { sessionId, messages } = await req.json();
 
     if (!sessionId || !messages?.length) {
       return NextResponse.json(
-        { error: 'sessionId and messages are required' },
-        { status: 400 }
-      )
+        { error: "sessionId and messages are required" },
+        { status: 400 },
+      );
     }
 
     // Filter out any still-streaming placeholders just in case
     const cleanMessages = messages.filter(
-      (m: { role: string; content: string }) => m.content.trim().length > 0
-    )
+      (m: { role: string; content: string }) => m.content.trim().length > 0,
+    );
 
-    const journalEntry = await generateJournalEntry(cleanMessages)
-    await markSessionComplete(sessionId, journalEntry)
+    const journalEntry = await generateJournalEntry(cleanMessages);
+    await markSessionComplete(sessionId, journalEntry);
 
-    return NextResponse.json({ journalEntry })
+    return NextResponse.json({ journalEntry });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

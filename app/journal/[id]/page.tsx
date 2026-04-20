@@ -1,47 +1,46 @@
-'use client'
+"use client";
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
-import Link from 'next/link'
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import Link from "next/link";
 
 type Session = {
-  id: string
-  title: string
-  created_at: string
-  journal_entry: string
-  status: 'active' | 'complete'
-}
+  id: string;
+  title: string;
+  created_at: string;
+  journal_entry: string;
+  status: "active" | "complete";
+};
 
 export default function JournalEntryPage() {
-  const { id } = useParams<{ id: string }>()
-  const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { id } = useParams<{ id: string }>();
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/journal/${id}`)
       .then((r) => r.json())
       .then(({ session, error }) => {
-        if (error) throw new Error(error)
-        setSession(session)
+        if (error) throw new Error(error);
+        setSession(session);
       })
       .catch((err) => setError(err.message))
-      .finally(() => setLoading(false))
-  }, [id])
+      .finally(() => setLoading(false));
+  }, [id]);
 
   const date = session
-    ? new Date(session.created_at).toLocaleDateString('en-CA', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
+    ? new Date(session.created_at).toLocaleDateString("en-CA", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
       })
-    : null
+    : null;
 
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 px-4 py-12">
       <div className="max-w-2xl mx-auto space-y-10">
-
         {/* Nav */}
         <Link
           href="/journal"
@@ -52,17 +51,16 @@ export default function JournalEntryPage() {
 
         {/* States */}
         {loading && (
-          <p className="text-stone-500 text-sm italic">Unrolling the scroll...</p>
+          <p className="text-stone-500 text-sm italic">
+            Unrolling the scroll...
+          </p>
         )}
 
-        {error && (
-          <p className="text-red-400 text-sm">{error}</p>
-        )}
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         {/* Entry */}
         {session && (
           <article className="space-y-8">
-
             {/* Header */}
             <div className="border-b border-stone-800 pb-6 space-y-2">
               <p className="text-stone-500 text-xs tracking-widest uppercase">
@@ -76,7 +74,7 @@ export default function JournalEntryPage() {
             {/* Journal body */}
             <div className="prose prose-invert prose-stone max-w-none">
               {session.journal_entry
-                .split('\n\n')
+                .split("\n\n")
                 .filter(Boolean)
                 .map((paragraph, i) => (
                   <p
@@ -106,30 +104,28 @@ export default function JournalEntryPage() {
                 </Link>
               </div>
             </div>
-
           </article>
         )}
-
       </div>
     </div>
-  )
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
 
   const copy = async () => {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <button
       onClick={copy}
       className="text-stone-500 hover:text-stone-300 text-sm transition-colors"
     >
-      {copied ? 'Copied ✓' : 'Copy entry'}
+      {copied ? "Copied ✓" : "Copy entry"}
     </button>
-  )
+  );
 }

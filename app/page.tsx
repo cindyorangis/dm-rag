@@ -1,28 +1,28 @@
 // app/page.tsx
-'use client'
+"use client";
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function HomePage() {
-  const router = useRouter()
-  const [isCreating, setIsCreating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const router = useRouter();
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const startAdventure = async () => {
-    setIsCreating(true)
-    setError(null)
+    setIsCreating(true);
+    setError(null);
 
     try {
-      const res = await fetch('/api/sessions', { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to create session')
-      const { sessionId } = await res.json()
-      router.push(`/session/${sessionId}`)
+      const res = await fetch("/api/sessions", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to create session");
+      const { sessionId } = await res.json();
+      router.push(`/session/${sessionId}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
-      setIsCreating(false)
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setIsCreating(false);
     }
-  }
+  };
 
   return (
     <main className="min-h-screen bg-stone-950 flex flex-col items-center justify-center px-4">
@@ -37,13 +37,11 @@ export default function HomePage() {
         </div>
 
         <p className="text-stone-400 font-serif italic leading-relaxed">
-          You stand at the edge of Neverwinter Wood. The road to Phandalin
-          lies ahead. Your destiny awaits.
+          You stand at the edge of Neverwinter Wood. The road to Phandalin lies
+          ahead. Your destiny awaits.
         </p>
 
-        {error && (
-          <p className="text-red-400 text-sm">{error}</p>
-        )}
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         <button
           onClick={startAdventure}
@@ -52,10 +50,9 @@ export default function HomePage() {
                      text-white font-serif text-lg rounded-lg transition-colors 
                      tracking-wide border border-amber-600"
         >
-          {isCreating ? 'Preparing your adventure...' : 'Begin Adventure'}
+          {isCreating ? "Preparing your adventure..." : "Begin Adventure"}
         </button>
-          <a
-        
+        <a
           href="/journal"
           className="block text-stone-500 hover:text-stone-300 text-sm transition-colors"
         >
@@ -63,5 +60,5 @@ export default function HomePage() {
         </a>
       </div>
     </main>
-  )
+  );
 }
