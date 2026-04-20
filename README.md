@@ -1,4 +1,4 @@
-# ⚔️  The Dungeon Master
+# ⚔️ The Dungeon Master
 An AI-Powered D&D Dungeon Master App
 Solo play. Full adventure. No DM required.
 
@@ -38,19 +38,20 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 ## How It Works
 
 ### 1. Document Ingestion (One-Time Setup)
-Each source book is parsed, chunked into sections, and converted into vector embeddings. These embeddings are stored in a Supabase database using the pgvector extension, enabling semantic search across all four books simultaneously.
+Each source book is parsed, chunked into ~500 token sections, and converted into vector embeddings via Ollama. These embeddings are stored in a Supabase database using the pgvector extension, enabling semantic search across all four books simultaneously.
 
 ### 2. RAG Pipeline (Every Message)
-When you send a message — whether it's 'I attack the goblin' or 'What are the rules for grappling?' — the following happens:
+When you send a message — whether it's "I attack the goblin" or "What are the rules for grappling?" — the following happens:
 
-- Your message is embedded into a vector
-- The top relevant chunks are retrieved from the knowledge base
-- Those chunks are injected as context into the LLM prompt
+- Your message is embedded into a vector using Ollama
+- The top 6 most relevant chunks are retrieved from Supabase via cosine similarity search
+- Those chunks are injected as context into the DM system prompt
 - The LLM responds in character as your DM, grounded in the retrieved rules
+- The response streams token-by-token to the UI
+- Both messages are persisted to the database when the stream completes
 
 ### 3. Session Journal (End of Session)
-When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative summary written in the voice of a scribe or party member — capturing key events, decisions, and outcomes in a story format.
-Each journal entry is saved to your session history and can be reviewed at any time.
+When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative entry written in the voice of the player's character — capturing key events, decisions, and outcomes in first-person prose. Each journal entry is saved and can be reviewed at any time.
 
 ---
 
@@ -58,20 +59,18 @@ Each journal entry is saved to your session history and can be reviewed at any t
 
 | Layer | Choice | Notes |
 | --- | --- | --- |
-| Frontend | Next.js (App Router) + TypeScript | Familiar stack, fast iteration |
+| Frontend | Next.js (App Router) + TypeScript | App Router, server and client components |
 | Styling | Tailwind CSS | Dark fantasy / parchment UI theme |
-| LLM | Gemini 2.0 Flash | Free tier, 1,500 req/day, large context |
-| Embeddings | Gemini text-embedding-004 | Free, included with Gemini API |
-| Vector DB | Supabase pgvector | Free tier, native similarity search |
+| LLM | Ollama (Llama 3) | Local inference, no API cost |
+| Embeddings | Ollama (nomic-embed-text) | Local embeddings, matches ingestion model |
+| Vector DB | Supabase pgvector | Cosine similarity via `<=>` operator |
 | Database | Supabase (PostgreSQL) | Sessions, messages, journal entries |
-| Auth | Supabase Auth | Single user DM login |
 | Hosting | Vercel | Free tier, zero-config Next.js deploys |
-
-All components operate within free tier limits. The only cost is your time.
 
 ---
 
 ## Database Schema
+
 ### documents
 Stores metadata for each source book (name, type, version).
 
@@ -83,7 +82,7 @@ id, document_id, content, embedding (vector), page, section
 ```
 
 ### sessions
-One row per play session. Stores session date, title, a raw transcript reference, and the generated journal entry.
+One row per play session. Stores session title, status, and the generated journal entry.
 
 ```
 id, user_id, title, created_at, journal_entry, status
@@ -99,95 +98,103 @@ id, session_id, role (user|assistant), content, created_at
 ---
 
 ## App Structure
+
 ### Pages
-- `/`  — Home / new session
-- `/session/[id]`  — Active play session (main chat UI)
-- `/journal`  — Browse past session journal entries
-- `/journal/[id]`  — Single session journal entry
+- `/` — Home / start new session
+- `/session/[id]` — Active play session (chat UI)
+- `/journal` — Browse past session journal entries
+- `/journal/[id]` — Single session journal entry
 
-### Key API Routes
-- `POST /api/chat`  — Main RAG pipeline: embed query → retrieve chunks → call Gemini → stream response
-- `POST /api/journal`  — End-of-session journal generation
-- `POST /api/ingest`  — One-time document ingestion (admin only)
-
----
-
-## UI & Experience
-The interface is designed to feel like a D&D session, not a chat app. The aesthetic draws from dark fantasy — candlelit parchment tones, weathered textures, serif typography — while remaining clean and readable.
-
-### Chat Interface
-- DM responses appear as styled narrative blocks
-- Player input is clean and minimal
-- Dice rolls are surfaced visually when they occur
-- Combat state (HP, initiative) shown in a sidebar panel
-
-### Journal View
-- Past sessions listed as aged scroll entries
-- Each journal rendered as a narrative story excerpt
-- Exportable as plain text or PDF
+### API Routes
+- `POST /api/sessions` — Create a new session
+- `GET /api/sessions` — List all sessions
+- `POST /api/chat` — RAG pipeline: embed → retrieve → stream LLM response
+- `POST /api/journal` — End-of-session journal generation
+- `GET /api/journal/[id]` — Fetch a single session with journal entry
 
 ---
 
-## Build Phases
-### Phase 1 — Foundation
-- Next.js project setup with Supabase
-- Supabase schema (documents, chunks, sessions, messages)
-- Document ingestion script (PDF → chunks → embeddings → pgvector)
-- Basic chat UI shell
+## Supabase Setup
 
-### Phase 2 — RAG Pipeline
-- Query embedding and similarity search
-- Gemini API integration with DM system prompt
-- Streamed responses in the chat UI
-- Conversation history management
+Enable the pgvector extension and create the similarity search function:
 
-### Phase 3 — DM Logic
-- Combat tracking (initiative, HP, turn order)
-- Dice roll parsing and resolution
-- NPC and location state persistence
-- Lost Mine of Phandelver story state tracking
+```sql
+create extension if not exists vector;
 
-### Phase 4 — Journal
-- End-of-session journal generation prompt
-- Journal storage and retrieval
-- Styled journal view with session history
-
-### Phase 5 — Polish
-- Dark fantasy UI theme
-- Mobile responsiveness
-- Export journal as PDF
-- Optional: dice roller UI
+create or replace function match_chunks(
+  query_embedding vector,
+  match_count int default 6
+)
+returns table (
+  id uuid,
+  content text,
+  similarity float
+)
+language sql stable
+as $$
+  select
+    id,
+    content,
+    1 - (embedding <=> query_embedding) as similarity
+  from chunks
+  order by embedding <=> query_embedding
+  limit match_count;
+$$;
+```
 
 ---
 
 ## Getting Started
+
 ### Prerequisites
 - Node.js 18+
+- Ollama installed and running locally
 - Supabase account (free)
-- Google AI Studio account for Gemini API key (free)
 - Vercel account for deployment (free)
 
+### Pull required Ollama models
+```bash
+ollama pull llama3
+ollama pull nomic-embed-text
+```
+
 ### Environment Variables
+
 ```
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-GEMINI_API_KEY=your_google_ai_studio_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_CHAT_MODEL=llama3
 ```
 
 ### Local Development
-```
+```bash
 npm install
 npm run dev
 ```
 
 ### Document Ingestion
-Place your source PDFs in /scripts/books/ and run:
+Place your source PDFs in `/scripts/books/` and run:
 
-```
+```bash
 npm run ingest
 ```
 
 This only needs to be run once. Chunks and embeddings are persisted in Supabase.
+
+---
+
+## Build Status
+
+| Phase | Description | Status |
+| --- | --- | --- |
+| 1 | Foundation — schema, ingestion, project setup | ✅ Complete |
+| 2 | RAG pipeline — embed, retrieve, stream, persist | ✅ Complete |
+| 3 | DM logic — combat tracking, dice, NPC state | 🔲 Upcoming |
+| 4 | Journal — generation, storage, list + detail views | ✅ Complete |
+| 5 | Polish — UI theme, mobile, PDF export | 🔲 Upcoming |
 
 ---
 
