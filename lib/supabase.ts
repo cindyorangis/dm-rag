@@ -11,5 +11,5 @@ const supabasePublishableKey =
 export const supabase = createClient(supabaseUrl, supabasePublishableKey);
 
 // Client for scripts/server-side (Admin/bypass RLS)
-const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const supabaseServiceRole = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRole);
