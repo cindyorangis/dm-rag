@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
 );
 
 // POST /api/sessions — create a new session
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ sessionId: data.id });
   } catch (err) {
+    console.error("Sessions route error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
