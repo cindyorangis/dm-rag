@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 export default function HomePage() {
   const router = useRouter();
   const [isCreating, setIsCreating] = useState(false);
+  const [characterText, setCharacterText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const startAdventure = async () => {
@@ -14,7 +15,13 @@ export default function HomePage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/sessions", { method: "POST" });
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          characterContext: characterText || undefined, // leave undefined if blank
+        }),
+      });
       if (!res.ok) throw new Error("Failed to create session");
       const { sessionId } = await res.json();
       router.push(`/session/${sessionId}`);
@@ -42,6 +49,12 @@ export default function HomePage() {
         </p>
 
         {error && <p className="text-red-400 text-sm">{error}</p>}
+
+        <textarea
+          value={characterText}
+          onChange={(e) => setCharacterText(e.target.value)}
+          placeholder="Describe your character (optional)..."
+        />
 
         <button
           onClick={startAdventure}
