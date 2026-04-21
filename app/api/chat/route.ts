@@ -19,7 +19,8 @@ import type { CombatState } from "@/lib/combat/types";
 import { embedText, retrieveChunks } from "@/lib/rag";
 
 export async function POST(req: NextRequest) {
-  const { sessionId, message, conversationHistory } = await req.json();
+  const { sessionId, message, history } = await req.json();
+  const conversationHistory = Array.isArray(history) ? history : [];
   const supabase = supabaseAdmin;
 
   // 1. Embed the player message and retrieve relevant chunks
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildDMSystemPrompt({ retrievedChunks, combatState });
 
   // 4. Build messages array for the LLM
-  const messages = [...conversationHistory, { role: "user", content: message }];
+  const messages = [...history, { role: "user", content: message }];
 
   // 5. Call Ollama (streaming)
   const ollamaRes = await fetch(`${process.env.OLLAMA_BASE_URL}/api/chat`, {
@@ -71,7 +72,9 @@ export async function POST(req: NextRequest) {
             const json = JSON.parse(line);
             const token = json.message?.content ?? "";
             fullResponse += token;
-            controller.enqueue(encoder.encode(token));
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
+            );
           } catch {}
         }
       }
@@ -90,13 +93,17 @@ export async function POST(req: NextRequest) {
         { session_id: sessionId, role: "assistant", content: fullResponse },
       ]);
 
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`),
+      );
       controller.close();
     },
   });
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
       "X-Combat-Active": String(combatState?.is_active ?? false),
     },
   });
