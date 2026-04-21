@@ -7,14 +7,15 @@ const supabase = createClient(
 );
 
 export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const { id } = await params;
     const { data, error } = await supabase
       .from("sessions")
       .select("id, title, created_at, journal_entry, status")
-      .eq("id", params.id)
+      .eq("id", id)
       .single();
 
     if (error) throw new Error(error.message);
