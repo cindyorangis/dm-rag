@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter(); // ← add this
-  const { messages, isStreaming, error, sendMessage, cancelStream } =
+  const { messages, isLoading, isStreaming, error, sendMessage, cancelStream } =
     useChat(id);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -63,11 +63,15 @@ export default function SessionPage() {
       </div>
       {/* Message list */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-        {messages.length === 0 && (
+        {isLoading ? (
+          <p className="text-center text-stone-500 italic mt-20 animate-pulse">
+            The torches flicker as your adventure loads…
+          </p>
+        ) : messages.length === 0 ? (
           <p className="text-center text-stone-500 italic mt-20">
             Your adventure begins. What do you do?
           </p>
-        )}
+        ) : null}
 
         {messages.map((msg) => (
           <div

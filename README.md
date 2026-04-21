@@ -46,7 +46,17 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 
 Each source book is parsed, chunked into ~500 token sections, and converted into vector embeddings via Ollama. These embeddings are stored in a Supabase database using the pgvector extension, enabling semantic search across all four books simultaneously.
 
-### 2. RAG Pipeline (Every Message)
+### 2. Character Creation
+
+Before a session begins, the player is presented with an optional character sheet. They can fill in name, race, class, background, ability scores, HP, AC, level, and freeform notes (equipment, spells, traits, backstory). All fields are optional — if left blank, the DM generates an adventurer automatically.
+
+Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to.
+
+### 3. Opening Narration
+
+When a new session is created, the app immediately generates an immersive opening narration — before the player types a single word. The DM sets the scene on the Triboar Trail, establishes the atmosphere, and drops the player directly into the goblin ambush. No "Welcome to the adventure." No prompts. Just the world.
+
+### 4. RAG Pipeline (Every Message)
 
 When you send a message — whether it's "I attack the goblin" or "What are the rules for grappling?" — the following happens:
 
@@ -57,7 +67,7 @@ When you send a message — whether it's "I attack the goblin" or "What are the 
 - The response streams token-by-token to the UI
 - Both messages are persisted to the database when the stream completes
 
-### 3. Combat System
+### 5. Combat System
 
 When combat begins, the app transitions into a structured turn-based mode:
 
@@ -70,7 +80,7 @@ When combat begins, the app transitions into a structured turn-based mode:
 
 Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, Nezznar the Black Spider, and more).
 
-### 4. Session Journal (End of Session)
+### 6. Session Journal (End of Session)
 
 When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative entry written in the voice of the player's character — capturing key events, decisions, and outcomes in first-person prose. Each journal entry is saved and can be reviewed at any time.
 
@@ -100,23 +110,23 @@ Stores metadata for each source book (name, type, version).
 
 Each chunk is a ~500 token passage from a source document, stored with its vector embedding. Indexed for fast similarity search with pgvector.
 
-```bash
+```
 id, document_id, content, embedding (vector), page, section
 ```
 
 ### sessions
 
-One row per play session. Stores session title, status, and the generated journal entry.
+One row per play session. Stores session title, status, character context, and the generated journal entry.
 
-```bash
-id, user_id, title, created_at, journal_entry, status
+```
+id, user_id, title, created_at, journal_entry, status, character_context
 ```
 
 ### messages
 
-Every message in a session — both player and DM — stored in order for conversation history and journal generation.
+Every message in a session — both player and DM — stored in order for conversation history and journal generation. The opening narration is stored here as the first assistant message when a session is created.
 
-```bash
+```
 id, session_id, role (user|assistant), content, created_at
 ```
 
@@ -124,7 +134,7 @@ id, session_id, role (user|assistant), content, created_at
 
 One row per active session. Persists the full combat snapshot — initiative order, HP, conditions, turn index, round number, and action log — so combat survives page refreshes and reconnects.
 
-```bash
+```
 id, session_id, is_active, round, current_turn_index, combatants (jsonb), log (jsonb), updated_at
 ```
 
@@ -132,29 +142,32 @@ id, session_id, is_active, round, current_turn_index, combatants (jsonb), log (j
 
 ## Project Structure
 
-```bash
+```
 app/
-api/
-chat/route.ts         # RAG pipeline + combat state updates
-sessions/route.ts     # Session CRUD
-journal/route.ts      # Journal generation
-session/[id]/page.tsx   # Active play session (chat UI)
-journal/page.tsx        # Journal list
-journal/[id]/page.tsx   # Single journal entry
-page.tsx                # Home / new session
+  api/
+    chat/route.ts                     # RAG pipeline + combat state updates
+    sessions/route.ts                 # Session CRUD + opening narration generation
+    sessions/[id]/messages/route.ts   # Fetch messages for a session
+    journal/route.ts                  # Journal generation
+  session/[id]/page.tsx               # Active play session (chat UI)
+  journal/page.tsx                    # Journal list
+  journal/[id]/page.tsx               # Single journal entry
+  page.tsx                            # Home + character creation flow
 lib/
-supabase.ts             # Supabase client (browser + admin)
-rag.ts                  # embedText() + retrieveChunks()
-dm-prompt.ts            # DM system prompt builder (injects combat state)
-combat/
-types.ts              # Combatant, CombatState, CombatLogEntry types
-dice.ts               # roll(), rollAttack(), rollDamage(), rollInitiative()
-engine.ts             # Pure state machine: advanceTurn, applyDamage, etc.
-detector.ts           # detectCombatStart(), parseDamageFromNarrative()
-encounters.ts         # LMoP monster stat blocks + encounter definitions
-repository.ts         # getCombatState(), upsertCombatState()
+  supabase.ts                         # Supabase client (browser + admin)
+  rag.ts                              # embedText() + retrieveChunks()
+  dm-prompt.ts                        # DM system prompt builder (injects combat state + character)
+  combat/
+    types.ts                          # Combatant, CombatState, CombatLogEntry types
+    dice.ts                           # roll(), rollAttack(), rollDamage(), rollInitiative()
+    engine.ts                         # Pure state machine: advanceTurn, applyDamage, etc.
+    detector.ts                       # detectCombatStart(), parseDamageFromNarrative()
+    encounters.ts                     # LMoP monster stat blocks + encounter definitions
+    repository.ts                     # getCombatState(), upsertCombatState()
+hooks/
+  useChat.ts                          # Chat state, streaming, and session message loading
 scripts/
-ingest.ts               # One-time document ingestion pipeline
+  ingest.ts                           # One-time document ingestion pipeline
 ```
 
 ---
@@ -163,15 +176,16 @@ ingest.ts               # One-time document ingestion pipeline
 
 ### Pages
 
-- `/` — Home / start new session
+- `/` — Home / character creation / start new session
 - `/session/[id]` — Active play session (chat UI)
 - `/journal` — Browse past session journal entries
 - `/journal/[id]` — Single session journal entry
 
 ### API Routes
 
-- `POST /api/sessions` — Create a new session
-- `GET /api/sessions` — List all sessions
+- `POST /api/sessions` — Create a new session, generate and persist the opening narration
+- `GET /api/sessions` — List all sessions (for journal page)
+- `GET /api/sessions/[id]/messages` — Fetch all messages for a session
 - `POST /api/chat` — RAG pipeline: embed → retrieve → stream LLM response + update combat state
 - `POST /api/journal` — End-of-session journal generation
 - `GET /api/journal/[id]` — Fetch a single session with journal entry
@@ -221,6 +235,12 @@ create table combat_state (
 );
 ```
 
+Add the character context column to sessions:
+
+```sql
+alter table sessions add column if not exists character_context text;
+```
+
 ---
 
 ## Getting Started
@@ -239,11 +259,13 @@ ollama pull llama3
 ollama pull nomic-embed-text
 ```
 
+> Run `ollama list` to verify your installed model names. The chat model name in your `.env.local` must exactly match what Ollama reports (e.g. `llama3.2` instead of `llama3`).
+
 ### Environment Variables
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBED_MODEL=nomic-embed-text
@@ -277,7 +299,9 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 | 2     | RAG pipeline — embed, retrieve, stream, persist    | ✅ Complete |
 | 3     | DM logic — combat tracking, dice, NPC state        | ✅ Complete |
 | 4     | Journal — generation, storage, list + detail views | ✅ Complete |
-| 5     | Polish — UI theme, mobile, PDF export              | 🔲 Upcoming |
+| 5     | Character creation — sheet UI, context injection   | ✅ Complete |
+| 6     | Opening narration — immersive session intro        | ✅ Complete |
+| 7     | Polish — UI theme, mobile, PDF export              | 🔲 Upcoming |
 
 ---
 

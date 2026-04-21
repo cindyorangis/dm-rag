@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 export type Message = {
   id: string;
@@ -9,9 +9,40 @@ export type Message = {
 
 export function useChat(sessionId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const loadMessages = async () => {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/messages`);
+        if (!res.ok) throw new Error("Failed to load messages");
+        const { messages: existing } = await res.json();
+        setMessages(
+          existing.map(
+            (m: {
+              id: string;
+              role: "user" | "assistant";
+              content: string;
+            }) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              streaming: false,
+            }),
+          ),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load session");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadMessages();
+  }, [sessionId]);
 
   const sendMessage = useCallback(
     async (userInput: string) => {
@@ -131,6 +162,7 @@ export function useChat(sessionId: string) {
 
   return {
     messages,
+    isLoading,
     isStreaming,
     error,
     sendMessage,

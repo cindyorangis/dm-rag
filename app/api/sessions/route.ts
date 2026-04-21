@@ -6,13 +6,17 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
 );
 
-const OPENING_SYSTEM_PROMPT = `You are the Dungeon Master for Lost Mine of Phandelver, a D&D 5e adventure set in the Forgotten Realms.
+const OPENING_SYSTEM_PROMPT = `You are the Dungeon Master for Lost Mine of Phandelver, a D&D 5e adventure.
 
-Your task right now is to deliver the opening narration for the adventure. Do not ask any questions. Do not prompt the player for input. Simply narrate.
+You are telling a story to a young child, around 7 or 8 years old. Use very simple words and short sentences. No long paragraphs. Make it exciting and easy to understand, like a bedtime adventure story.
 
-Set the scene immersively: the dusty Triboar Trail east of Neverwinter, the wagon of supplies for Phandalin, the smell of pine and horse sweat, the quiet that feels a little too quiet. End the narration at the moment of the goblin ambush — describe what the player sees, hears, and can react to. Leave the player in the middle of the moment, not after it.
+Set the scene: a dusty road through the woods, a wagon, and then goblins jumping out to ambush the player. End at the moment of the ambush — describe what the player sees and can do next.
 
-Tone: terse, atmospheric, Tolkien-adjacent. No "Welcome to the adventure!" No meta-commentary. Drop them straight in.`;
+Rules:
+- Short sentences only
+- Simple everyday words (no "oppressive", "malevolent", "cacophony")
+- Fun and a little bit scary, but not too scary
+- No meta-commentary or "Welcome!" — just start the story`;
 
 async function generateOpeningMessage(
   characterContext?: string,
@@ -35,6 +39,7 @@ async function generateOpeningMessage(
   });
 
   const data = await response.json();
+  console.log("Ollama raw response:", JSON.stringify(data).slice(0, 300));
   return data.message?.content ?? "";
 }
 
@@ -63,8 +68,12 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (sessionError) throw new Error(sessionError.message);
+
     // 2. Generate the opening DM narration
+    console.log("Calling Ollama at:", process.env.OLLAMA_BASE_URL);
     const openingMessage = await generateOpeningMessage(characterContext);
+    console.log("Opening message length:", openingMessage.length);
+    console.log("Opening message preview:", openingMessage.slice(0, 120));
 
     // 3. Persist it as the first assistant message
     const { error: msgError } = await supabase.from("messages").insert({
@@ -72,6 +81,7 @@ export async function POST(req: NextRequest) {
       role: "assistant",
       content: openingMessage,
     });
+    console.log("Message insert error:", msgError);
 
     if (msgError) throw new Error(msgError.message);
 
