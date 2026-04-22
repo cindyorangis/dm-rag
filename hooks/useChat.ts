@@ -9,12 +9,80 @@ export type Message = {
   streaming?: boolean;
 };
 
+export type RollRequest = {
+  type: "attack" | "check" | "save" | "damage";
+  dice: string; // e.g. "d20+5", "d8+3"
+  targetAC?: number;
+  targetName?: string;
+  dc?: number;
+  label: string; // e.g. "Attack vs Goblin (AC 15)"
+};
+
+// Parses [ROLL: attack d20+5 vs AC 15 target:Goblin] tags from DM response
+export function parseRollRequests(text: string): RollRequest[] {
+  const requests: RollRequest[] = [];
+  const pattern = /\[ROLL:\s*([^\]]+)\]/gi;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const raw = match[1].trim();
+
+    const attackMatch = raw.match(
+      /attack\s+(d20[+-]\d+)\s+vs\s+AC\s+(\d+)(?:\s+target:(.+))?/i,
+    );
+    if (attackMatch) {
+      requests.push({
+        type: "attack",
+        dice: attackMatch[1],
+        targetAC: parseInt(attackMatch[2]),
+        targetName: attackMatch[3]?.trim(),
+        label: `Attack roll vs ${attackMatch[3]?.trim() ?? "target"} (AC ${attackMatch[2]})`,
+      });
+      continue;
+    }
+
+    const checkMatch = raw.match(/check\s+(d20[+-]\d+)\s+DC(\d+)\s+(.+)/i);
+    if (checkMatch) {
+      requests.push({
+        type: "check",
+        dice: checkMatch[1],
+        dc: parseInt(checkMatch[2]),
+        label: `${checkMatch[3].trim()} check (DC ${checkMatch[2]})`,
+      });
+      continue;
+    }
+
+    const saveMatch = raw.match(/save\s+(d20[+-]\d+)\s+DC(\d+)\s+(.+)/i);
+    if (saveMatch) {
+      requests.push({
+        type: "save",
+        dice: saveMatch[1],
+        dc: parseInt(saveMatch[2]),
+        label: `${saveMatch[3].trim()} saving throw (DC ${saveMatch[2]})`,
+      });
+      continue;
+    }
+
+    const dmgMatch = raw.match(/damage\s+(d\d+[+-]?\d*)/i);
+    if (dmgMatch) {
+      requests.push({
+        type: "damage",
+        dice: dmgMatch[1],
+        label: `Damage roll (${dmgMatch[1]})`,
+      });
+    }
+  }
+
+  return requests;
+}
+
 export function useChat(sessionId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [awaitingInitiative, setAwaitingInitiative] = useState(false);
+  const [pendingRolls, setPendingRolls] = useState<RollRequest[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -43,7 +111,6 @@ export function useChat(sessionId: string) {
         setIsLoading(false);
       }
     };
-
     loadMessages();
   }, [sessionId]);
 
@@ -53,13 +120,13 @@ export function useChat(sessionId: string) {
 
       setError(null);
       setAwaitingInitiative(false);
+      setPendingRolls([]);
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
         role: "user",
         content: userInput,
       };
-
       const assistantMsgId = crypto.randomUUID();
       const assistantMsg: Message = {
         id: assistantMsgId,
@@ -72,7 +139,6 @@ export function useChat(sessionId: string) {
       setIsStreaming(true);
 
       const history = messages.map(({ role, content }) => ({ role, content }));
-
       abortRef.current = new AbortController();
 
       try {
@@ -89,6 +155,7 @@ export function useChat(sessionId: string) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let fullResponse = "";
 
         while (true) {
           const { done, value } = await reader.read();
@@ -105,10 +172,10 @@ export function useChat(sessionId: string) {
 
             try {
               const parsed = JSON.parse(raw);
-
               if (parsed.error) throw new Error(parsed.error);
 
               if (parsed.token) {
+                fullResponse += parsed.token;
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantMsgId
@@ -124,12 +191,14 @@ export function useChat(sessionId: string) {
                     m.id === assistantMsgId ? { ...m, streaming: false } : m,
                   ),
                 );
-                // Surface the initiative flag from the backend
                 if (parsed.awaitingInitiative) {
                   setAwaitingInitiative(true);
+                } else {
+                  const rolls = parseRollRequests(fullResponse);
+                  if (rolls.length > 0) setPendingRolls(rolls);
                 }
               }
-            } catch (parseErr) {
+            } catch {
               // skip malformed SSE lines
             }
           }
@@ -150,14 +219,15 @@ export function useChat(sessionId: string) {
   const cancelStream = useCallback(() => {
     abortRef.current?.abort();
   }, []);
-
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
   }, []);
-
   const dismissInitiative = useCallback(() => {
     setAwaitingInitiative(false);
+  }, []);
+  const dismissRolls = useCallback(() => {
+    setPendingRolls([]);
   }, []);
 
   return {
@@ -170,5 +240,7 @@ export function useChat(sessionId: string) {
     clearMessages,
     awaitingInitiative,
     dismissInitiative,
+    pendingRolls,
+    dismissRolls,
   };
 }

@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 interface CharacterData {
   name?: string;
-  identity?: string; // e.g. "Half-Elf Rogue (Level 3)"
+  identity?: string;
   background?: string;
   hp?: string;
   ac?: string;
@@ -24,12 +24,14 @@ interface CharacterData {
 interface Combatant {
   id: string;
   name: string;
+  type: "player" | "monster";
   hp: number;
-  maxHp: number;
+  max_hp: number;
   ac: number;
   initiative: number;
-  isPlayer: boolean;
+  initiative_mod: number;
   conditions?: string[];
+  is_alive: boolean;
 }
 
 interface CombatState {
@@ -37,7 +39,8 @@ interface CombatState {
   round: number;
   current_turn_index: number;
   combatants: Combatant[];
-  log: { message: string; round: number }[];
+  log: { round: number; description: string }[];
+  awaiting_player_initiative?: boolean;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -49,42 +52,45 @@ function parseCharacterContext(ctx: string): CharacterData {
     .map((l) => l.trim())
     .filter(Boolean);
   const data: CharacterData = {};
-
   for (const line of lines) {
     if (line.startsWith("Name:")) {
       data.name = line.replace("Name:", "").trim();
-    } else if (line.startsWith("Background:")) {
+      continue;
+    }
+    if (line.startsWith("Background:")) {
       data.background = line.replace("Background:", "").trim();
-    } else if (line.startsWith("Ability scores")) {
-      const scores = line.replace("Ability scores —", "").trim();
-      for (const pair of scores.split("|")) {
+      continue;
+    }
+    if (line.startsWith("Ability scores")) {
+      for (const pair of line
+        .replace("Ability scores —", "")
+        .trim()
+        .split("|")) {
         const [stat, val] = pair.trim().split(" ");
         const key = stat?.toLowerCase() as keyof CharacterData;
         if (key && val) (data as Record<string, string>)[key] = val;
       }
-    } else if (line.startsWith("HP:") || line.includes("HP:")) {
-      const hpMatch = line.match(/HP:\s*(\d+)/);
-      if (hpMatch) data.hp = hpMatch[1];
-      const acMatch = line.match(/AC:\s*(\d+)/);
-      if (acMatch) data.ac = acMatch[1];
-    } else if (
+      continue;
+    }
+    const hpMatch = line.match(/HP:\s*(\d+)/);
+    if (hpMatch) data.hp = hpMatch[1];
+    const acMatch = line.match(/AC:\s*(\d+)/);
+    if (acMatch) data.ac = acMatch[1];
+    if (line.match(/Level \d+/)) {
+      data.identity = line;
+      continue;
+    }
+    if (
       !line.startsWith("HP:") &&
       !line.startsWith("AC:") &&
       !line.startsWith("Name:") &&
       !line.startsWith("Background:") &&
       !line.startsWith("Ability")
     ) {
-      // Lines like "Half-Elf Rogue (Level 3)"
-      if (line.match(/Level \d+/)) {
-        data.identity = line;
-      } else if (!data.notes) {
-        data.notes = line;
-      } else {
-        data.notes += " " + line;
-      }
+      if (!data.notes) data.notes = line;
+      else data.notes += " " + line;
     }
   }
-
   return data;
 }
 
@@ -96,18 +102,177 @@ function modifier(score: string | undefined): string {
   return mod >= 0 ? `+${mod}` : `${mod}`;
 }
 
-function hpPercent(hp: number, max: number): number {
-  if (max <= 0) return 0;
+function hpPercent(hp: number, max: number) {
   return Math.max(0, Math.min(100, (hp / max) * 100));
 }
-
-function hpColor(pct: number): string {
+function hpColor(pct: number) {
   if (pct > 60) return "bg-emerald-600";
   if (pct > 30) return "bg-amber-500";
   return "bg-red-600";
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Dice Roll Component ───────────────────────────────────────────────────────
+
+function InitiativeRoller({
+  dexMod,
+  onRoll,
+}: {
+  dexMod: number;
+  onRoll: (total: number, natural: number) => void;
+}) {
+  const [rolling, setRolling] = useState(false);
+  const [result, setResult] = useState<{
+    natural: number;
+    total: number;
+  } | null>(null);
+  const [displayNum, setDisplayNum] = useState<number | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const handleRoll = () => {
+    if (rolling || result) return;
+    setRolling(true);
+
+    // Animate through random numbers for 800ms
+    let ticks = 0;
+    const interval = setInterval(() => {
+      setDisplayNum(Math.floor(Math.random() * 20) + 1);
+      ticks++;
+      if (ticks > 16) {
+        clearInterval(interval);
+        const natural = Math.floor(Math.random() * 20) + 1;
+        const total = natural + dexMod;
+        setDisplayNum(natural);
+        setResult({ natural, total });
+        setRolling(false);
+      }
+    }, 50);
+  };
+
+  const handleConfirm = () => {
+    if (!result) return;
+    setConfirmed(true);
+    setTimeout(() => onRoll(result.total, result.natural), 400);
+  };
+
+  return (
+    <div className="my-4 max-w-2xl mx-auto">
+      <div
+        className={`
+        border rounded-lg p-5 space-y-4 transition-all duration-500
+        ${
+          confirmed
+            ? "border-amber-700/30 bg-stone-900/30 opacity-50"
+            : "border-amber-700/60 bg-gradient-to-b from-amber-950/30 to-stone-900/50"
+        }
+      `}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3">
+          <div className="w-px h-8 bg-amber-800/40" />
+          <div>
+            <p className="font-serif text-amber-300 text-sm">
+              Roll for Initiative!
+            </p>
+            <p className="text-stone-500 text-xs font-sans mt-0.5">
+              d20 {dexMod >= 0 ? `+ ${dexMod}` : `− ${Math.abs(dexMod)}`} (DEX
+              modifier)
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          {/* Die face */}
+          <button
+            onClick={handleRoll}
+            disabled={!!result || rolling}
+            className={`
+              relative w-16 h-16 rounded-lg border-2 flex items-center justify-center
+              font-serif text-2xl font-bold transition-all duration-150 select-none
+              ${
+                result
+                  ? result.natural === 20
+                    ? "border-yellow-400 bg-yellow-950/40 text-yellow-300 shadow-lg shadow-yellow-900/40"
+                    : result.natural === 1
+                      ? "border-red-700 bg-red-950/40 text-red-400"
+                      : "border-amber-600/60 bg-amber-950/20 text-amber-200"
+                  : rolling
+                    ? "border-amber-700/80 bg-amber-950/30 text-amber-300 animate-pulse cursor-wait"
+                    : "border-stone-600 bg-stone-800/60 text-stone-400 hover:border-amber-600/70 hover:text-amber-300 hover:bg-amber-950/20 cursor-pointer active:scale-95"
+              }
+            `}
+          >
+            {/* D20 shape hint */}
+            <span className="absolute inset-0 flex items-center justify-center">
+              {displayNum !== null || result ? (
+                <span className={rolling ? "opacity-60" : "opacity-100"}>
+                  {displayNum ?? "?"}
+                </span>
+              ) : (
+                <span className="text-stone-500 text-lg">d20</span>
+              )}
+            </span>
+          </button>
+
+          {/* Result breakdown */}
+          <div className="flex-1 space-y-1">
+            {result ? (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span
+                    className={`font-serif text-3xl font-bold ${
+                      result.natural === 20
+                        ? "text-yellow-300"
+                        : result.natural === 1
+                          ? "text-red-400"
+                          : "text-amber-200"
+                    }`}
+                  >
+                    {result.total}
+                  </span>
+                  <span className="text-stone-500 text-sm font-sans">
+                    ({result.natural} + {dexMod >= 0 ? "+" : ""}
+                    {dexMod})
+                  </span>
+                </div>
+                {result.natural === 20 && (
+                  <p className="text-yellow-400/80 text-xs font-serif italic">
+                    ✦ Natural 20 — you go first!
+                  </p>
+                )}
+                {result.natural === 1 && (
+                  <p className="text-red-400/80 text-xs font-serif italic">
+                    A poor start to a dire encounter…
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-stone-600 text-sm font-serif italic">
+                {rolling ? "Rolling…" : "Click the die to roll"}
+              </p>
+            )}
+          </div>
+
+          {/* Confirm button */}
+          {result && !confirmed && (
+            <button
+              onClick={handleConfirm}
+              className="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white text-sm font-serif rounded transition-colors"
+            >
+              Set Initiative →
+            </button>
+          )}
+          {confirmed && (
+            <span className="text-amber-600/60 text-xs font-serif italic">
+              Locked in
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Sidebar sub-components ────────────────────────────────────────────────────
 
 function StatBlock({
   label,
@@ -157,7 +322,7 @@ function CombatantRow({
   combatant: Combatant;
   isCurrentTurn: boolean;
 }) {
-  const pct = hpPercent(combatant.hp, combatant.maxHp);
+  const pct = hpPercent(combatant.hp, combatant.max_hp);
   return (
     <div
       className={`rounded p-2 space-y-1.5 transition-colors ${
@@ -167,33 +332,26 @@ function CombatantRow({
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0">
           {isCurrentTurn && (
-            <span className="text-amber-400 text-[0.6rem]">▶</span>
+            <span className="text-amber-400 text-[0.6rem] shrink-0">▶</span>
           )}
           <span
-            className={`font-serif text-sm ${
-              combatant.isPlayer ? "text-amber-300" : "text-stone-300"
-            }`}
+            className={`font-serif text-sm truncate ${combatant.type === "player" ? "text-amber-300" : "text-stone-300"}`}
           >
             {combatant.name}
           </span>
-          {combatant.isPlayer && (
-            <span className="text-[0.45rem] bg-amber-900/50 border border-amber-800/50 text-amber-600/80 px-1 rounded uppercase tracking-wider">
+          {combatant.type === "player" && (
+            <span className="text-[0.45rem] bg-amber-900/50 border border-amber-800/50 text-amber-600/80 px-1 rounded uppercase tracking-wider shrink-0">
               You
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[0.6rem] text-stone-500 font-sans">
-            Init {combatant.initiative}
-          </span>
-          <span className="text-[0.6rem] text-stone-500 font-sans">
-            AC {combatant.ac}
-          </span>
+        <div className="flex items-center gap-2 shrink-0 text-[0.6rem] text-stone-500 font-sans">
+          <span>Init {combatant.initiative}</span>
+          <span>AC {combatant.ac}</span>
         </div>
       </div>
-      {/* HP bar */}
       <div className="space-y-0.5">
         <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
           <div
@@ -202,7 +360,7 @@ function CombatantRow({
           />
         </div>
         <span className="text-[0.55rem] text-stone-500 font-sans">
-          {combatant.hp} / {combatant.maxHp} HP
+          {combatant.hp} / {combatant.max_hp} HP
         </span>
       </div>
       {combatant.conditions && combatant.conditions.length > 0 && (
@@ -226,8 +384,17 @@ function CombatantRow({
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { messages, isLoading, isStreaming, error, sendMessage, cancelStream } =
-    useChat(id);
+  const {
+    messages,
+    isLoading,
+    isStreaming,
+    error,
+    sendMessage,
+    cancelStream,
+    awaitingInitiative,
+    dismissInitiative,
+  } = useChat(id);
+
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -238,52 +405,72 @@ export default function SessionPage() {
   );
   const [isEndingSession, setIsEndingSession] = useState(false);
 
-  // Fetch session data (character context + combat state)
+  // ── Fetch session + combat state ────────────────────────────────────────────
   const fetchSessionData = useCallback(async () => {
     try {
       const [sessionRes, combatRes] = await Promise.all([
         fetch(`/api/sessions/${id}`),
-        fetch(`/api/combat/${id}`).catch(() => null),
+        fetch(`/api/combat/${id}`),
       ]);
-
       if (sessionRes.ok) {
         const session = await sessionRes.json();
-        if (session.character_context) {
+        if (session.character_context)
           setCharacter(parseCharacterContext(session.character_context));
-        }
       }
-
-      if (combatRes?.ok) {
+      if (combatRes.ok) {
         const combat = await combatRes.json();
         setCombatState(combat);
-        if (combat?.is_active) setSidebarTab("combat");
+        if (combat?.is_active && !combat?.awaiting_player_initiative)
+          setSidebarTab("combat");
       }
-    } catch (err) {
-      // Non-fatal — sidebar just won't have data
-    }
+    } catch {}
   }, [id]);
 
   useEffect(() => {
     fetchSessionData();
   }, [fetchSessionData]);
 
-  // Re-poll combat state while streaming (DM may have triggered combat)
+  // Re-poll after each DM response
   useEffect(() => {
-    if (!isStreaming) {
-      fetchSessionData();
-    }
+    if (!isStreaming) fetchSessionData();
   }, [isStreaming, fetchSessionData]);
+
+  // Auto-switch to combat tab once initiative is resolved
+  useEffect(() => {
+    if (combatState?.is_active && !combatState.awaiting_player_initiative) {
+      setSidebarTab("combat");
+    }
+  }, [combatState?.is_active, combatState?.awaiting_player_initiative]);
 
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, awaitingInitiative]);
 
-  // Switch to combat tab automatically when combat starts
-  useEffect(() => {
-    if (combatState?.is_active) setSidebarTab("combat");
-  }, [combatState?.is_active]);
+  // ── Initiative submission ───────────────────────────────────────────────────
+  const handleInitiativeRoll = useCallback(
+    async (total: number) => {
+      try {
+        const res = await fetch(`/api/combat/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initiativeRoll: total }),
+        });
+        if (res.ok) {
+          const updated = await res.json();
+          setCombatState(updated);
+          setSidebarTab("combat");
+        }
+      } catch (err) {
+        console.error("Failed to submit initiative:", err);
+      } finally {
+        dismissInitiative();
+      }
+    },
+    [id, dismissInitiative],
+  );
 
+  // ── End session ─────────────────────────────────────────────────────────────
   const endSession = async () => {
     if (isStreaming || isEndingSession) return;
     setIsEndingSession(true);
@@ -294,8 +481,7 @@ export default function SessionPage() {
         body: JSON.stringify({ sessionId: id, messages }),
       });
       router.push(`/journal/${id}`);
-    } catch (err) {
-      console.error("Failed to end session:", err);
+    } catch {
       setIsEndingSession(false);
     }
   };
@@ -321,9 +507,14 @@ export default function SessionPage() {
     ? activeCombatants[combatState.current_turn_index]?.id
     : null;
 
+  // DEX modifier for the initiative roller
+  const dexMod = character.dex
+    ? Math.floor((parseInt(character.dex) - 10) / 2)
+    : 0;
+
   return (
     <div className="flex h-screen bg-stone-950 text-stone-100 overflow-hidden">
-      {/* ── Main chat column ─────────────────────────────────────── */}
+      {/* ── Chat column ──────────────────────────────────────────────────────── */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Header */}
         <div className="border-b border-stone-800 px-4 py-3 flex justify-between items-center shrink-0">
@@ -331,11 +522,12 @@ export default function SessionPage() {
             <h1 className="font-serif text-amber-400 text-sm tracking-widest uppercase">
               Lost Mine of Phandelver
             </h1>
-            {combatState?.is_active && (
-              <span className="text-[0.55rem] bg-red-950/70 border border-red-800/60 text-red-400 px-2 py-0.5 rounded uppercase tracking-widest animate-pulse">
-                ⚔ Combat — Round {combatState.round}
-              </span>
-            )}
+            {combatState?.is_active &&
+              !combatState.awaiting_player_initiative && (
+                <span className="text-[0.55rem] bg-red-950/70 border border-red-800/60 text-red-400 px-2 py-0.5 rounded uppercase tracking-widest animate-pulse">
+                  ⚔ Combat — Round {combatState.round}
+                </span>
+              )}
           </div>
           <button
             onClick={endSession}
@@ -361,9 +553,7 @@ export default function SessionPage() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`max-w-2xl mx-auto ${
-                msg.role === "user" ? "text-right" : "text-left"
-              }`}
+              className={`max-w-2xl mx-auto ${msg.role === "user" ? "text-right" : "text-left"}`}
             >
               {msg.role === "assistant" ? (
                 <div className="prose prose-invert prose-stone max-w-none font-serif text-stone-200 leading-relaxed">
@@ -380,45 +570,56 @@ export default function SessionPage() {
             </div>
           ))}
 
+          {/* ── Initiative roller — appears inline after DM triggers combat ── */}
+          {awaitingInitiative && !isStreaming && (
+            <InitiativeRoller dexMod={dexMod} onRoll={handleInitiativeRoll} />
+          )}
+
           {error && <p className="text-center text-red-400 text-sm">{error}</p>}
           <div ref={bottomRef} />
         </div>
 
-        {/* Input */}
+        {/* Input — locked while waiting for initiative roll */}
         <div className="border-t border-stone-800 px-4 py-4 shrink-0">
-          <div className="max-w-2xl mx-auto flex gap-3 items-end">
-            <textarea
-              className="flex-1 bg-stone-900 border border-stone-700 rounded-lg px-4 py-3 text-stone-100 placeholder-stone-500 resize-none focus:outline-none focus:border-amber-600 text-sm"
-              rows={2}
-              placeholder="What do you do?"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isStreaming}
-            />
-            {isStreaming ? (
-              <button
-                onClick={cancelStream}
-                className="px-4 py-3 bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg text-sm transition-colors"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmit}
-                disabled={!input.trim()}
-                className="px-4 py-3 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white rounded-lg text-sm transition-colors"
-              >
-                Send
-              </button>
-            )}
-          </div>
+          {awaitingInitiative && !isStreaming ? (
+            <p className="text-center text-amber-700/70 font-serif italic text-sm py-1">
+              Roll your initiative above before acting…
+            </p>
+          ) : (
+            <div className="max-w-2xl mx-auto flex gap-3 items-end">
+              <textarea
+                className="flex-1 bg-stone-900 border border-stone-700 rounded-lg px-4 py-3 text-stone-100 placeholder-stone-500 resize-none focus:outline-none focus:border-amber-600 text-sm"
+                rows={2}
+                placeholder="What do you do?"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isStreaming}
+              />
+              {isStreaming ? (
+                <button
+                  onClick={cancelStream}
+                  className="px-4 py-3 bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg text-sm transition-colors"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={!input.trim()}
+                  className="px-4 py-3 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white rounded-lg text-sm transition-colors"
+                >
+                  Send
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Sidebar ──────────────────────────────────────────────── */}
+      {/* ── Sidebar ──────────────────────────────────────────────────────────── */}
       <div className="w-72 shrink-0 border-l border-stone-800 flex flex-col bg-stone-950/80 overflow-hidden">
-        {/* Sidebar tab bar */}
+        {/* Tab bar */}
         <div className="flex border-b border-stone-800 shrink-0">
           {(
             [
@@ -449,7 +650,7 @@ export default function SessionPage() {
 
         {/* Sidebar content */}
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          {/* ── CHARACTER TAB ── */}
+          {/* ── CHARACTER ── */}
           {sidebarTab === "character" && (
             <>
               {!hasCharacter ? (
@@ -458,7 +659,6 @@ export default function SessionPage() {
                 </p>
               ) : (
                 <>
-                  {/* Identity */}
                   <SidebarSection title="Adventurer">
                     <div className="space-y-0.5">
                       {character.name && (
@@ -478,8 +678,6 @@ export default function SessionPage() {
                       )}
                     </div>
                   </SidebarSection>
-
-                  {/* Combat stats */}
                   {(character.hp || character.ac) && (
                     <SidebarSection title="Combat">
                       <div className="flex gap-3">
@@ -506,8 +704,6 @@ export default function SessionPage() {
                       </div>
                     </SidebarSection>
                   )}
-
-                  {/* Ability scores */}
                   {STATS.some((s) => character[s]) && (
                     <SidebarSection title="Ability Scores">
                       <div className="grid grid-cols-3 gap-1.5">
@@ -522,8 +718,6 @@ export default function SessionPage() {
                       </div>
                     </SidebarSection>
                   )}
-
-                  {/* Notes */}
                   {character.notes && (
                     <SidebarSection title="Notes">
                       <p className="text-stone-400 font-serif italic text-xs leading-relaxed">
@@ -536,7 +730,7 @@ export default function SessionPage() {
             </>
           )}
 
-          {/* ── COMBAT TAB ── */}
+          {/* ── COMBAT ── */}
           {sidebarTab === "combat" && (
             <>
               {!combatState?.is_active ? (
@@ -546,6 +740,16 @@ export default function SessionPage() {
                   </p>
                   <p className="text-stone-700 text-xs">
                     Initiative order will appear here when combat begins.
+                  </p>
+                </div>
+              ) : combatState.awaiting_player_initiative ? (
+                <div className="text-center mt-8 space-y-2 px-2">
+                  <div className="text-2xl">🎲</div>
+                  <p className="text-amber-700/80 font-serif italic text-sm">
+                    Waiting for your initiative roll…
+                  </p>
+                  <p className="text-stone-600 text-xs">
+                    Roll in the chat to see the order.
                   </p>
                 </div>
               ) : (
@@ -565,8 +769,6 @@ export default function SessionPage() {
                         ))}
                     </div>
                   </SidebarSection>
-
-                  {/* Combat log */}
                   {combatState.log?.length > 0 && (
                     <SidebarSection title="Combat Log">
                       <div className="space-y-1 max-h-40 overflow-y-auto">
@@ -581,7 +783,7 @@ export default function SessionPage() {
                               <span className="text-amber-900/60 mr-1">
                                 R{entry.round}
                               </span>
-                              {entry.message}
+                              {entry.description}
                             </p>
                           ))}
                       </div>
@@ -592,7 +794,7 @@ export default function SessionPage() {
             </>
           )}
 
-          {/* ── LOG TAB ── */}
+          {/* ── LOG ── */}
           {sidebarTab === "log" && (
             <>
               <SidebarSection title="Session Stats">
@@ -625,7 +827,6 @@ export default function SessionPage() {
                   )}
                 </div>
               </SidebarSection>
-
               <SidebarSection title="Quick Reference">
                 <div className="space-y-2 text-xs font-serif text-stone-500">
                   <p>
@@ -658,7 +859,6 @@ export default function SessionPage() {
                   </p>
                 </div>
               </SidebarSection>
-
               <SidebarSection title="Useful Phrases">
                 <div className="space-y-1.5">
                   {[

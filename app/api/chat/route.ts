@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildDMSystemPrompt } from "@/lib/dm-prompt";
 import { getCombatState, upsertCombatState } from "@/lib/combat/repository";
@@ -136,7 +137,7 @@ async function processCombatStateUpdate({
   playerMessage: string;
   dmResponse: string;
   combatState: CombatState | null;
-  supabase: ReturnType<typeof supabaseAdmin>;
+  supabase: SupabaseClient;
 }): Promise<CombatState | null> {
   // ── Case 1: Combat just started ──────────────────────────────────────────
   if (!combatState?.is_active && detectCombatStart(playerMessage, dmResponse)) {

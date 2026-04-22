@@ -13,7 +13,6 @@ Your responsibilities:
 Tone: dramatic, atmospheric, occasionally darkly humorous. Channel classic D&D.`;
 
 const RULES_CONTEXT_HEADER = `\n\n--- RETRIEVED RULES & LORE ---\n`;
-
 const COMBAT_STATE_HEADER = `\n\n--- CURRENT COMBAT STATE ---\n`;
 
 function formatCombatant(c: Combatant, isCurrent: boolean): string {
@@ -31,7 +30,7 @@ function formatCombatState(state: CombatState): string {
 
   const lines = [
     `Round: ${state.round}`,
-    `Current Turn: ${currentCombatant?.name ?? "Unknown"}`,
+    `Current Turn: ${currentCombatant?.name ?? "Unknown"} (${currentCombatant?.type ?? "?"})`,
     ``,
     `INITIATIVE ORDER:`,
     ...state.combatants.map((c, i) =>
@@ -39,7 +38,6 @@ function formatCombatState(state: CombatState): string {
     ),
   ];
 
-  // Include last 5 log entries for context
   if (state.log.length > 0) {
     const recent = state.log.slice(-5);
     lines.push(``, `RECENT ACTIONS:`);
@@ -57,16 +55,98 @@ function formatNoCombat(): string {
   return "No combat active. The player is exploring or roleplaying.";
 }
 
+function buildCombatInstructions(state: CombatState): string {
+  const current = state.combatants[state.current_turn_index];
+  if (!current) return "";
+
+  const isPlayerTurn = current.type === "player";
+  const nextAliveCombatants = getUpcomingTurns(state);
+
+  if (isPlayerTurn) {
+    return `
+--- COMBAT INSTRUCTIONS: PLAYER'S TURN ---
+It is ${current.name}'s turn (the PLAYER).
+
+PLAYER TURN RULES:
+- Wait for the player to declare their action before resolving anything.
+- If the player declares an ATTACK: respond with exactly this format on its own line:
+  [ROLL: attack d20+<bonus> vs AC <target_ac> target:<target_name>]
+  Then wait — do not resolve the attack yourself.
+- If the player casts a SPELL that requires an attack roll or saving throw, use the same [ROLL:] format.
+- If the player does something requiring an ABILITY CHECK: use this format:
+  [ROLL: check d20+<ability_mod> DC<difficulty> <skill_name>]
+- If the player takes damage and needs a SAVING THROW:
+  [ROLL: save d20+<save_mod> DC<dc> <ability_name>]
+- Do NOT roll dice for the player. Do NOT resolve attacks without a roll result.
+- Do NOT advance to the next turn until the player has acted and dice have been resolved.
+- After the player acts and dice are resolved, narrate the outcome, then say who is next.`;
+  } else {
+    // Monster / NPC turn
+    const alivePlayers = state.combatants.filter(
+      (c) => c.type === "player" && c.is_alive,
+    );
+    const playerAC = alivePlayers.length > 0 ? alivePlayers[0].ac : 14;
+
+    return `
+--- COMBAT INSTRUCTIONS: MONSTER'S TURN ---
+It is ${current.name}'s turn (a MONSTER/NPC). The player does NOT act this turn.
+
+MONSTER TURN RULES:
+- Describe ${current.name}'s action dramatically and in full.
+- Roll the monster's attack dice yourself and narrate the result, e.g.:
+  "${current.name} lunges at you — (rolled 13 + 4 = 17 vs your AC ${playerAC} — HIT!) You take X slashing damage."
+- Apply damage, conditions, or effects as appropriate.
+- CRITICAL: Do NOT ask the player what they want to do. Do NOT say "What do you do?" or "It's your turn."
+- CRITICAL: Do NOT prompt for any player input until the player's turn comes around.
+- After fully resolving ${current.name}'s turn, briefly state who acts next:
+  ${nextAliveCombatants
+    .slice(0, 2)
+    .map((c) => `"Next: ${c.name} (${c.type})"`)
+    .join(", then ")}
+- If the next turn is the player's, end with: "It is your turn — what do you do?"
+- If the next turn is another monster, narrate that monster's turn too, chaining until you reach the player.`;
+  }
+}
+
+function getUpcomingTurns(state: CombatState): Combatant[] {
+  const total = state.combatants.length;
+  const upcoming: Combatant[] = [];
+  let idx = (state.current_turn_index + 1) % total;
+  let checked = 0;
+  while (checked < total) {
+    const c = state.combatants[idx];
+    if (c?.is_alive) upcoming.push(c);
+    if (upcoming.length >= 3) break;
+    idx = (idx + 1) % total;
+    checked++;
+  }
+  return upcoming;
+}
+
 export interface BuildPromptOptions {
   retrievedChunks: string[];
   combatState: CombatState | null;
+  characterContext?: string | null;
 }
 
 export function buildDMSystemPrompt({
   retrievedChunks,
   combatState,
+  characterContext,
 }: BuildPromptOptions): string {
   let prompt = BASE_DM_PROMPT;
+
+  // Inject character context so DM always knows who the player is
+  if (characterContext) {
+    prompt += `\n\n--- PLAYER CHARACTER ---\n${characterContext}`;
+  } else {
+    prompt += `\n\n--- PLAYER CHARACTER ---
+No character sheet provided. Generate a suitable adventurer for Lost Mine of Phandelver.
+Choose: a name, race, class (level 1), background, ability scores, HP, and AC.
+Introduce the character naturally in your opening narration.
+Remember the character you created for the entire session — refer to them by name.
+At the start of the session, or if the player asks "who am I", describe the character fully.`;
+  }
 
   // Inject retrieved RAG chunks
   if (retrievedChunks.length > 0) {
@@ -81,30 +161,26 @@ export function buildDMSystemPrompt({
       ? formatCombatState(combatState)
       : formatNoCombat();
 
-  // Combat-specific instructions
-  if (combatState?.is_active) {
-    prompt += `\n\n--- COMBAT INSTRUCTIONS ---
-- It is currently ${combatState.combatants[combatState.current_turn_index]?.name}'s turn.
-- If the player declares an attack, resolve it: ask for (or simulate) an attack roll vs target AC, then roll damage.
-- For monster turns: describe the monster's action, roll attack vs player AC (assume ~14 if unknown), narrate the result.
-- After resolving the current turn, advance to the next combatant in initiative order.
-- If a combatant reaches 0 HP, declare them defeated and remove from the turn order.
-- When all monsters are defeated, declare combat over and return to exploration.
-- Always end your response by stating whose turn is next.
-- Include all dice rolls explicitly in your narrative: e.g. "(rolled 14 + 3 = 17 vs AC 15 — hit!)"`;
+  // Inject strict turn instructions
+  if (combatState?.is_active && !combatState.awaiting_player_initiative) {
+    prompt += buildCombatInstructions(combatState);
+  } else if (combatState?.awaiting_player_initiative) {
+    prompt += `\n\n--- COMBAT INSTRUCTIONS: AWAITING INITIATIVE ---
+Combat has just started. The player is about to roll their initiative.
+Do not ask the player to act yet. Do not advance the turn order.
+Simply confirm that combat has begun and that you are waiting for their initiative roll.`;
   }
 
   return prompt;
 }
 
-// Utility: build a combat-start prompt injection
 export function buildCombatStartPrompt(combatants: Combatant[]): string {
   const monsterNames = combatants
     .filter((c) => c.type === "monster")
     .map((c) => c.name)
     .join(", ");
 
-  return `COMBAT HAS BEGUN. Roll for initiative and arrange the turn order.
-Enemies: ${monsterNames}
-Describe the start of combat dramatically, announce the initiative order, and prompt the player for their first action.`;
+  return `COMBAT HAS BEGUN. Enemies: ${monsterNames}.
+Describe the start of combat dramatically. The player will roll their own initiative — do NOT roll it for them.
+Announce that initiative is being determined and set a tense scene.`;
 }
