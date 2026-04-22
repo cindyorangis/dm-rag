@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-);
+import { supabaseAdmin } from "@/lib/supabase";
 
 const OPENING_SYSTEM_PROMPT = `You are the Dungeon Master for Lost Mine of Phandelver, a D&D 5e adventure.
 
@@ -57,7 +52,7 @@ export async function POST(req: NextRequest) {
     })}`;
 
     // 1. Create the session
-    const { data: session, error: sessionError } = await supabase
+    const { data: session, error: sessionError } = await supabaseAdmin
       .from("sessions")
       .insert({
         title,
@@ -76,7 +71,7 @@ export async function POST(req: NextRequest) {
     console.log("Opening message preview:", openingMessage.slice(0, 120));
 
     // 3. Persist it as the first assistant message
-    const { error: msgError } = await supabase.from("messages").insert({
+    const { error: msgError } = await supabaseAdmin.from("messages").insert({
       session_id: session.id,
       role: "assistant",
       content: openingMessage,
@@ -96,7 +91,7 @@ export async function POST(req: NextRequest) {
 // GET /api/sessions — list all sessions (for journal page)
 export async function GET() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("sessions")
       .select("id, title, created_at, status, journal_entry")
       .order("created_at", { ascending: false });

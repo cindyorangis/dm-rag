@@ -46,4 +46,8 @@ export interface CombatState {
   combatants: Combatant[];
   log: CombatLogEntry[];
   updated_at: string;
+  // Set to true after combat starts but before the player has rolled initiative.
+  // The frontend shows a dice roll prompt; once submitted, the backend sorts
+  // combatants and clears this flag.
+  awaiting_player_initiative?: boolean;
 }

@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-);
+import { supabaseAdmin } from "@/lib/supabase";
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3";
@@ -58,7 +53,7 @@ async function generateJournalEntry(
 }
 
 async function markSessionComplete(sessionId: string, journalEntry: string) {
-  const { error } = await supabase
+  const { error } = await supabaseAdmin
     .from("sessions")
     .update({ status: "complete", journal_entry: journalEntry })
     .eq("id", sessionId);

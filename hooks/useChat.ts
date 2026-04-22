@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect, useCallback, useRef } from "react";
 
 export type Message = {
@@ -12,6 +14,7 @@ export function useChat(sessionId: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [awaitingInitiative, setAwaitingInitiative] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -49,15 +52,14 @@ export function useChat(sessionId: string) {
       if (!userInput.trim() || isStreaming) return;
 
       setError(null);
+      setAwaitingInitiative(false);
 
-      // Append user message immediately
       const userMsg: Message = {
         id: crypto.randomUUID(),
         role: "user",
         content: userInput,
       };
 
-      // Placeholder for streaming assistant response
       const assistantMsgId = crypto.randomUUID();
       const assistantMsg: Message = {
         id: assistantMsgId,
@@ -69,7 +71,6 @@ export function useChat(sessionId: string) {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setIsStreaming(true);
 
-      // Build history from current messages (exclude the new ones we just added)
       const history = messages.map(({ role, content }) => ({ role, content }));
 
       abortRef.current = new AbortController();
@@ -79,11 +80,7 @@ export function useChat(sessionId: string) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: abortRef.current.signal,
-          body: JSON.stringify({
-            sessionId,
-            message: userInput,
-            history,
-          }),
+          body: JSON.stringify({ sessionId, message: userInput, history }),
         });
 
         if (!res.ok) throw new Error(`Request failed: ${res.statusText}`);
@@ -99,7 +96,7 @@ export function useChat(sessionId: string) {
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
-          buffer = lines.pop() ?? ""; // keep incomplete line in buffer
+          buffer = lines.pop() ?? "";
 
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
@@ -109,9 +106,7 @@ export function useChat(sessionId: string) {
             try {
               const parsed = JSON.parse(raw);
 
-              if (parsed.error) {
-                throw new Error(parsed.error);
-              }
+              if (parsed.error) throw new Error(parsed.error);
 
               if (parsed.token) {
                 setMessages((prev) =>
@@ -129,6 +124,10 @@ export function useChat(sessionId: string) {
                     m.id === assistantMsgId ? { ...m, streaming: false } : m,
                   ),
                 );
+                // Surface the initiative flag from the backend
+                if (parsed.awaitingInitiative) {
+                  setAwaitingInitiative(true);
+                }
               }
             } catch (parseErr) {
               // skip malformed SSE lines
@@ -136,12 +135,9 @@ export function useChat(sessionId: string) {
           }
         }
       } catch (err) {
-        if ((err as Error).name === "AbortError") return; // user cancelled
-
+        if ((err as Error).name === "AbortError") return;
         const msg = err instanceof Error ? err.message : "Something went wrong";
         setError(msg);
-
-        // Remove the empty assistant placeholder on error
         setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
       } finally {
         setIsStreaming(false);
@@ -160,6 +156,10 @@ export function useChat(sessionId: string) {
     setError(null);
   }, []);
 
+  const dismissInitiative = useCallback(() => {
+    setAwaitingInitiative(false);
+  }, []);
+
   return {
     messages,
     isLoading,
@@ -168,5 +168,7 @@ export function useChat(sessionId: string) {
     sendMessage,
     cancelStream,
     clearMessages,
+    awaitingInitiative,
+    dismissInitiative,
   };
 }

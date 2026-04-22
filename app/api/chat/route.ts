@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { buildDMSystemPrompt, buildCombatStartPrompt } from "@/lib/dm-prompt";
+import { buildDMSystemPrompt } from "@/lib/dm-prompt";
 import { getCombatState, upsertCombatState } from "@/lib/combat/repository";
 import {
   detectCombatStart,
@@ -12,10 +12,15 @@ import {
   advanceTurn,
   appendLog,
   endCombat,
+  sortByInitiative,
+  rollAllInitiatives,
 } from "@/lib/combat/engine";
-import type { CombatState } from "@/lib/combat/types";
-
-// Your existing embed + retrieve functions
+import {
+  detectEncounterKey,
+  buildEncounterMonstersOnly,
+} from "@/lib/combat/encounters";
+import { v4 as uuidv4 } from "uuid";
+import type { CombatState, Combatant } from "@/lib/combat/types";
 import { embedText, retrieveChunks } from "@/lib/rag";
 
 export async function POST(req: NextRequest) {
@@ -34,7 +39,7 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildDMSystemPrompt({ retrievedChunks, combatState });
 
   // 4. Build messages array for the LLM
-  const messages = [...history, { role: "user", content: message }];
+  const messages = [...conversationHistory, { role: "user", content: message }];
 
   // 5. Call Ollama (streaming)
   const ollamaRes = await fetch(`${process.env.OLLAMA_BASE_URL}/api/chat`, {
@@ -85,6 +90,7 @@ export async function POST(req: NextRequest) {
         playerMessage: message,
         dmResponse: fullResponse,
         combatState,
+        supabase,
       });
 
       // 8. Persist messages to DB
@@ -93,8 +99,15 @@ export async function POST(req: NextRequest) {
         { session_id: sessionId, role: "assistant", content: fullResponse },
       ]);
 
+      // 9. Signal the frontend whether initiative is needed
       controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`),
+        encoder.encode(
+          `data: ${JSON.stringify({
+            done: true,
+            awaitingInitiative:
+              combatState?.awaiting_player_initiative ?? false,
+          })}\n\n`,
+        ),
       );
       controller.close();
     },
@@ -104,50 +117,79 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "X-Combat-Active": String(combatState?.is_active ?? false),
     },
   });
 }
 
-// --- Combat state post-processing ---
+// ─────────────────────────────────────────────────────────────────────────────
+// Combat state post-processing
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function processCombatStateUpdate({
   sessionId,
   playerMessage,
   dmResponse,
   combatState,
+  supabase,
 }: {
   sessionId: string;
   playerMessage: string;
   dmResponse: string;
   combatState: CombatState | null;
+  supabase: ReturnType<typeof supabaseAdmin>;
 }): Promise<CombatState | null> {
-  // Case 1: Combat just started
+  // ── Case 1: Combat just started ──────────────────────────────────────────
   if (!combatState?.is_active && detectCombatStart(playerMessage, dmResponse)) {
-    // You'll want to pass real monster data here — for now, stub with a goblin
-    // In production, the LLM response or encounter data determines who to add
+    // Load the session to get character_context for the player combatant
+    const { data: session } = await supabase
+      .from("sessions")
+      .select("character_context")
+      .eq("id", sessionId)
+      .single();
+
+    const playerCombatant = buildPlayerCombatant(session?.character_context);
+
+    // Detect which encounter based on message context, fall back to trail ambush
+    const encounterKey = detectEncounterKey(playerMessage, dmResponse);
+    const monsters = buildEncounterMonstersOnly(encounterKey);
+
+    // Roll initiatives for all NPCs (monsters only — player rolls their own)
+    const monstersWithInitiative = rollAllInitiatives(monsters);
+
+    // Player initiative is 0 for now; re-sorted after player rolls
+    const combatants: Combatant[] = [
+      { ...playerCombatant, initiative: 0 },
+      ...monstersWithInitiative,
+    ];
+
     const newState = await upsertCombatState({
       session_id: sessionId,
       is_active: true,
       round: 1,
       current_turn_index: 0,
-      combatants: [], // populated by encounter loader (see note below)
+      combatants,
       log: [
         {
           round: 1,
           turn: 0,
           actor: "DM",
-          description: "Combat began.",
+          description: "Combat began. Waiting for player initiative roll.",
           timestamp: new Date().toISOString(),
         },
       ],
-    });
+      awaiting_player_initiative: true,
+    } as Omit<CombatState, "id" | "updated_at">);
+
     return newState;
   }
 
+  // ── Not in combat ────────────────────────────────────────────────────────
   if (!combatState?.is_active) return null;
 
-  // Case 2: Combat ongoing — parse damage events and advance turn
+  // ── Still waiting for player initiative — don't advance ─────────────────
+  if (combatState.awaiting_player_initiative) return combatState;
+
+  // ── Case 2: Combat ongoing — parse damage and advance turn ───────────────
   let state = { ...combatState };
 
   const damageEvents = parseDamageFromNarrative(dmResponse);
@@ -163,12 +205,12 @@ async function processCombatStateUpdate({
         round: state.round,
         turn: state.current_turn_index,
         actor: "DM",
-        description: `${target.name} took ${event.amount} damage (HP: ${target.hp - event.amount}/${target.max_hp})`,
+        description: `${target.name} took ${event.amount} damage (${target.hp - event.amount}/${target.max_hp} HP)`,
       });
     }
   }
 
-  // Case 3: Combat ended
+  // ── Case 3: Combat ended ─────────────────────────────────────────────────
   if (detectCombatEnd(dmResponse)) {
     state = endCombat(state);
     state = appendLog(state, {
@@ -185,4 +227,44 @@ async function processCombatStateUpdate({
   state = advanceTurn(state);
   await upsertCombatState(state);
   return state;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build a player Combatant from the character_context string
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildPlayerCombatant(
+  characterContext: string | null | undefined,
+): Omit<Combatant, "initiative"> {
+  let name = "Adventurer";
+  let hp = 10;
+  let ac = 12;
+  let dexMod = 0;
+
+  if (characterContext) {
+    const nameMatch = characterContext.match(/Name:\s*(.+)/);
+    if (nameMatch) name = nameMatch[1].trim();
+
+    const hpMatch = characterContext.match(/HP:\s*(\d+)/);
+    if (hpMatch) hp = parseInt(hpMatch[1]);
+
+    const acMatch = characterContext.match(/AC:\s*(\d+)/);
+    if (acMatch) ac = parseInt(acMatch[1]);
+
+    // DEX score → modifier
+    const dexMatch = characterContext.match(/DEX\s+(\d+)/i);
+    if (dexMatch) dexMod = Math.floor((parseInt(dexMatch[1]) - 10) / 2);
+  }
+
+  return {
+    id: uuidv4(),
+    name,
+    type: "player",
+    hp,
+    max_hp: hp,
+    ac,
+    initiative_mod: dexMod,
+    conditions: [],
+    is_alive: true,
+  };
 }

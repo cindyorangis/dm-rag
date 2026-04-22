@@ -2,7 +2,10 @@ import { v4 as uuidv4 } from "uuid";
 import type { Combatant } from "./types";
 import { createCombatState } from "./engine";
 
-// Stat blocks from the Monster Manual / LMoP
+// ─────────────────────────────────────────────────────────────────────────────
+// Monster stat blocks
+// ─────────────────────────────────────────────────────────────────────────────
+
 const MONSTER_TEMPLATES: Record<
   string,
   Omit<Combatant, "id" | "initiative">
@@ -69,6 +72,10 @@ const MONSTER_TEMPLATES: Record<
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Spawn helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function spawnMonster(
   templateKey: string,
   overrides?: Partial<Combatant>,
@@ -91,7 +98,10 @@ export function spawnMultiple(
   }));
 }
 
-// Predefined encounter groups from LMoP locations
+// ─────────────────────────────────────────────────────────────────────────────
+// Encounter definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const ENCOUNTERS: Record<string, () => Omit<Combatant, "initiative">[]> =
   {
     cragmaw_hideout_entrance: () => [...spawnMultiple("goblin", 2)],
@@ -108,14 +118,74 @@ export const ENCOUNTERS: Record<string, () => Omit<Combatant, "initiative">[]> =
       spawnMonster("nezznar"),
       ...spawnMultiple("wolf", 2),
     ],
+    generic_goblin: () => [...spawnMultiple("goblin", 2)],
   };
 
-// Build a full combat state for a named encounter + player
+// ─────────────────────────────────────────────────────────────────────────────
+// Detect which encounter is starting based on message context
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ENCOUNTER_HINTS: Array<{
+  patterns: RegExp[];
+  key: string;
+}> = [
+  {
+    patterns: [/triboar trail/i, /goblin ambush/i, /road to phandalin/i],
+    key: "triboar_trail_ambush",
+  },
+  {
+    patterns: [/cragmaw hideout/i, /hideout entrance/i],
+    key: "cragmaw_hideout_entrance",
+  },
+  {
+    patterns: [/cragmaw interior/i, /goblin boss/i, /klarg/i],
+    key: "cragmaw_hideout_interior",
+  },
+  {
+    patterns: [/redbrand/i, /sleeping giant/i, /phandalin alley/i],
+    key: "phandalin_redbrand_alley",
+  },
+  {
+    patterns: [/wave echo cave/i, /black spider/i, /nezznar/i],
+    key: "wave_echo_cave_final",
+  },
+];
+
+export function detectEncounterKey(
+  playerMessage: string,
+  dmResponse: string,
+): string {
+  const combined = `${playerMessage} ${dmResponse}`.toLowerCase();
+  for (const hint of ENCOUNTER_HINTS) {
+    if (hint.patterns.some((p) => p.test(combined))) {
+      return hint.key;
+    }
+  }
+  // Default: generic goblin skirmish (most common early encounter)
+  return "triboar_trail_ambush";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Return only the monster combatants for an encounter (no player)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function buildEncounterMonstersOnly(
+  encounterKey: string,
+): Omit<Combatant, "initiative">[] {
+  const factory =
+    ENCOUNTERS[encounterKey] ?? ENCOUNTERS["triboar_trail_ambush"];
+  return factory();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build a full combat state for a named encounter + player (legacy helper)
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function buildEncounterState(
   sessionId: string,
   encounterKey: string,
   player: Omit<Combatant, "initiative">,
 ): ReturnType<typeof createCombatState> {
-  const monsters = ENCOUNTERS[encounterKey]?.() ?? [];
+  const monsters = buildEncounterMonstersOnly(encounterKey);
   return createCombatState(sessionId, [player, ...monsters]);
 }
