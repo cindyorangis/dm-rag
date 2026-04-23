@@ -1,0 +1,35 @@
+# This is an example configuration file
+# To learn more, see the full config.yaml reference: https://docs.continue.dev/reference
+
+name: Local Ollama Setup
+version: 1.0.0
+schema: v1
+
+# Define which models can be used
+# https://docs.continue.dev/customization/models
+models:
+  # Acts as your main Chat and Inline-Edit model
+  - name: qwen2.5-coder-7b
+    provider: ollama
+    model: qwen2.5-coder:7b
+    apiBase: http://localhost:11434
+    roles:
+      - chat
+      - edit
+      - apply
+      - subagent
+      - autocomplete
+    capabilities:
+      - tool_use
+    defaultCompletionOptions:
+      contextLength: 128000
+
+  - name: nomic-embed-text Embed
+    provider: ollama
+    model: nomic-embed-text:latest
+    roles:
+      - embed
+
+# MCP Servers that Continue can access
+# https://docs.continue.dev/customization/mcp-tools
+mcpServers: []

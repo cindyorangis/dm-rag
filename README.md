@@ -48,9 +48,9 @@ Each source book is parsed, chunked into ~500 token sections, and converted into
 
 ### 2. Character Creation
 
-Before a session begins, the player is presented with an optional character sheet. They can fill in name, race, class, background, ability scores, HP, AC, level, and freeform notes (equipment, spells, traits, backstory). All fields are optional — if left blank, the DM generates an adventurer automatically.
+Before a session begins, the player is presented with an optional character sheet. They can fill in name, race, class, background, ability scores, HP, AC, level, and freeform notes (equipment, spells, traits, backstory). All fields are optional — if left blank, the DM generates an adventurer automatically and remembers it for the full session.
 
-Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to.
+Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to. A **"Who am I?"** button in the session header lets you ask the DM to describe your character at any time.
 
 ### 3. Opening Narration
 
@@ -71,16 +71,27 @@ When you send a message — whether it's "I attack the goblin" or "What are the 
 
 When combat begins, the app transitions into a structured turn-based mode:
 
-- **Initiative** is rolled automatically for all combatants (player + monsters)
+- **Encounter detection** identifies which LMoP encounter is starting based on context (Triboar Trail ambush, Cragmaw Hideout, Redbrand alley, Wave Echo Cave, etc.) and spawns the correct monster stat blocks automatically
+- **Monster initiatives** are rolled server-side; the **player rolls their own initiative** via an animated dice widget that appears inline in the chat
 - **Combat state** is persisted to Supabase — surviving a refresh or reconnect
 - The **DM system prompt** is rebuilt each turn with full combat context injected: initiative order, HP, AC, conditions, and recent action log
+- **Turn ownership** is enforced strictly: on monster turns, the DM narrates and resolves enemy actions without prompting the player; on the player's turn, the DM emits a structured roll request
+- **Dice roll widgets** appear inline in the chat whenever the DM requires a roll — attack rolls (with hit/miss resolved against target AC), ability checks, saving throws, and damage rolls all use the same animated d20/dX interface
 - **Damage events** are parsed from the DM's narrative and applied to combatant HP
 - **Conditions** (poisoned, prone, grappled, etc.) are tracked per combatant
 - Combat ends when all monsters (or the player) reach 0 HP — the DM narrates the outcome and the session returns to exploration mode
 
-Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, Nezznar the Black Spider, and more).
+Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, wolves, owlbear, Nezznar the Black Spider, and more).
 
-### 6. Session Journal (End of Session)
+### 6. Session Sidebar
+
+The session page includes a persistent sidebar with three tabs:
+
+- **Character** — name, race/class/level, background, HP, AC, and all six ability scores with modifiers calculated automatically. Falls back to an "Ask the DM" prompt if no sheet was filled in.
+- **Combat** — live initiative order sorted by roll, HP bars that shift green → amber → red as combatants take damage, AC and initiative values, active conditions, and a scrollable combat log. Shows a "waiting for initiative roll" state when combat has just started. Auto-switches to this tab when combat begins.
+- **Log** — session stats (message count, DM responses, combat rounds), a D&D 5e quick reference card, and clickable phrase shortcuts that pre-fill the input box.
+
+### 7. Session Journal (End of Session)
 
 When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative entry written in the voice of the player's character — capturing key events, decisions, and outcomes in first-person prose. Each journal entry is saved and can be reviewed at any time.
 
@@ -132,10 +143,12 @@ id, session_id, role (user|assistant), content, created_at
 
 ### combat_state
 
-One row per active session. Persists the full combat snapshot — initiative order, HP, conditions, turn index, round number, and action log — so combat survives page refreshes and reconnects.
+One row per active session. Persists the full combat snapshot — initiative order, HP, conditions, turn index, round number, action log, and whether the player still needs to roll their initiative.
 
 ```
-id, session_id, is_active, round, current_turn_index, combatants (jsonb), log (jsonb), updated_at
+id, session_id, is_active, round, current_turn_index,
+combatants (jsonb), log (jsonb), awaiting_player_initiative (boolean),
+updated_at
 ```
 
 ---
@@ -147,25 +160,31 @@ app/
   api/
     chat/route.ts                     # RAG pipeline + combat state updates
     sessions/route.ts                 # Session CRUD + opening narration generation
+    sessions/[id]/route.ts            # Fetch a single session (character context etc.)
     sessions/[id]/messages/route.ts   # Fetch messages for a session
+    combat/[id]/route.ts              # GET combat state; PATCH to submit player initiative
     journal/route.ts                  # Journal generation
-  session/[id]/page.tsx               # Active play session (chat UI)
+    journal/[id]/route.ts             # Fetch a single journal entry
+  session/[id]/page.tsx               # Active play session (chat + sidebar UI)
   journal/page.tsx                    # Journal list
   journal/[id]/page.tsx               # Single journal entry
   page.tsx                            # Home + character creation flow
 lib/
   supabase.ts                         # Supabase client (browser + admin)
   rag.ts                              # embedText() + retrieveChunks()
-  dm-prompt.ts                        # DM system prompt builder (injects combat state + character)
+  dm-prompt.ts                        # DM system prompt builder — injects combat state,
+                                      # character context, and strict turn instructions
   combat/
     types.ts                          # Combatant, CombatState, CombatLogEntry types
     dice.ts                           # roll(), rollAttack(), rollDamage(), rollInitiative()
     engine.ts                         # Pure state machine: advanceTurn, applyDamage, etc.
     detector.ts                       # detectCombatStart(), parseDamageFromNarrative()
-    encounters.ts                     # LMoP monster stat blocks + encounter definitions
+    encounters.ts                     # LMoP monster stat blocks, encounter definitions,
+                                      # detectEncounterKey(), buildEncounterMonstersOnly()
     repository.ts                     # getCombatState(), upsertCombatState()
 hooks/
-  useChat.ts                          # Chat state, streaming, and session message loading
+  useChat.ts                          # Chat state, streaming, initiative flag,
+                                      # pendingRolls parsed from DM [ROLL:] tags
 scripts/
   ingest.ts                           # One-time document ingestion pipeline
 ```
@@ -177,7 +196,7 @@ scripts/
 ### Pages
 
 - `/` — Home / character creation / start new session
-- `/session/[id]` — Active play session (chat UI)
+- `/session/[id]` — Active play session (chat UI + character/combat/log sidebar)
 - `/journal` — Browse past session journal entries
 - `/journal/[id]` — Single session journal entry
 
@@ -185,10 +204,54 @@ scripts/
 
 - `POST /api/sessions` — Create a new session, generate and persist the opening narration
 - `GET /api/sessions` — List all sessions (for journal page)
+- `GET /api/sessions/[id]` — Fetch a single session including character context
 - `GET /api/sessions/[id]/messages` — Fetch all messages for a session
 - `POST /api/chat` — RAG pipeline: embed → retrieve → stream LLM response + update combat state
+- `GET /api/combat/[id]` — Fetch current combat state for a session
+- `PATCH /api/combat/[id]` — Submit player initiative roll; re-sorts combatants and clears awaiting flag
 - `POST /api/journal` — End-of-session journal generation
 - `GET /api/journal/[id]` — Fetch a single session with journal entry
+
+---
+
+## Combat Flow
+
+```
+Player message triggers combat
+        ↓
+detectCombatStart() fires in chat/route.ts
+        ↓
+detectEncounterKey() identifies the encounter from context
+        ↓
+buildEncounterMonstersOnly() spawns correct monster stat blocks
+        ↓
+rollAllInitiatives() rolls d20 + mod for every monster
+        ↓
+combat_state saved with awaiting_player_initiative: true
+        ↓
+SSE done event includes awaitingInitiative: true
+        ↓
+InitiativeRoller widget appears inline in chat
+        ↓
+Player clicks die → animated roll → confirms result
+        ↓
+PATCH /api/combat/[id] applies player total, sorts all combatants
+        ↓
+Combat sidebar populates with full initiative order + HP bars
+        ↓
+── Player's turn ──────────────────────────────────────────
+DM prompt instructs: emit [ROLL: attack d20+X vs AC Y target:Z]
+useChat parses [ROLL:] tags → DiceRoller widget appears
+Player rolls → result sent back as player message
+DM narrates outcome
+        ↓
+── Monster's turn ─────────────────────────────────────────
+DM prompt instructs: resolve monster action fully, do NOT prompt player
+DM narrates attack, rolls dice itself, applies damage
+Chains through all monster turns until player's turn comes around
+        ↓
+Repeat until combat ends
+```
 
 ---
 
@@ -231,6 +294,7 @@ create table combat_state (
   current_turn_index int default 0,
   combatants jsonb default '[]'::jsonb,
   log jsonb default '[]'::jsonb,
+  awaiting_player_initiative boolean default false,
   updated_at timestamptz default now()
 );
 ```
@@ -240,6 +304,12 @@ Add the character context column to sessions:
 ```sql
 alter table sessions add column if not exists character_context text;
 ```
+
+> **Note:** If you created the `combat_state` table before the initiative roll feature was added, run this migration:
+> ```sql
+> alter table combat_state
+>   add column if not exists awaiting_player_initiative boolean default false;
+> ```
 
 ---
 
@@ -293,15 +363,19 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 
 ## Build Status
 
-| Phase | Description                                        | Status      |
-| ----- | -------------------------------------------------- | ----------- |
-| 1     | Foundation — schema, ingestion, project setup      | ✅ Complete |
-| 2     | RAG pipeline — embed, retrieve, stream, persist    | ✅ Complete |
-| 3     | DM logic — combat tracking, dice, NPC state        | ✅ Complete |
-| 4     | Journal — generation, storage, list + detail views | ✅ Complete |
-| 5     | Character creation — sheet UI, context injection   | ✅ Complete |
-| 6     | Opening narration — immersive session intro        | ✅ Complete |
-| 7     | Polish — UI theme, mobile, PDF export              | 🔲 Upcoming |
+| Phase | Description                                                       | Status      |
+| ----- | ----------------------------------------------------------------- | ----------- |
+| 1     | Foundation — schema, ingestion, project setup                     | ✅ Complete |
+| 2     | RAG pipeline — embed, retrieve, stream, persist                   | ✅ Complete |
+| 3     | DM logic — combat tracking, dice, NPC state                       | ✅ Complete |
+| 4     | Journal — generation, storage, list + detail views                | ✅ Complete |
+| 5     | Character creation — sheet UI, context injection                  | ✅ Complete |
+| 6     | Opening narration — immersive session intro                       | ✅ Complete |
+| 7     | Session sidebar — character stats, combat tracker, log            | ✅ Complete |
+| 8     | Player dice rolling — initiative, attacks, checks, saves, damage  | ✅ Complete |
+| 9     | Turn enforcement — monsters resolve fully before player is prompted| ✅ Complete |
+| 10    | Encounter detection — correct monsters spawned per LMoP location  | ✅ Complete |
+| 11    | Polish — UI theme, mobile, PDF export                             | 🔲 Upcoming |
 
 ---
 
