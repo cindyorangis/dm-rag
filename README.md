@@ -67,7 +67,19 @@ When you send a message — whether it's "I attack the goblin" or "What are the 
 - The response streams token-by-token to the UI
 - Both messages are persisted to the database when the stream completes
 
-### 5. Combat System
+### 5. Structured DM Output
+
+Every DM response is structured into three parts via prompt instructions and parsed before rendering:
+
+- **Narrative** — the pure story prose shown in the chat bubble
+- **`[STATUS]` block** — 2–4 bullet points summarizing the current situation (active quests, known threats, key NPCs), rendered as a "Quest Status" card below the narrative instead of bleeding into the prose
+- **`[HINTS]` block** — 3–4 suggested next actions tagged by type (Explore, Social, Action, Lore), rendered as a collapsible "What can I do?" panel the player can expand after any DM response
+
+The raw tagged string is always stored in Supabase. Parsing is display-only, so journal generation, conversation history injection, and combat parsing all continue to operate on the full content unchanged.
+
+A two-pass fallback parser handles legacy messages and cases where the LLM drifts from the format: pass 1 catches labeled blocks like `Combat State: * ...`; pass 2 catches status-flavored sentences at paragraph boundaries. Hints are only rendered for structured responses.
+
+### 6. Combat System
 
 When combat begins, the app transitions into a structured turn-based mode:
 
@@ -83,7 +95,7 @@ When combat begins, the app transitions into a structured turn-based mode:
 
 Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, wolves, owlbear, Nezznar the Black Spider, and more).
 
-### 6. Session Sidebar
+### 7. Session Sidebar
 
 The session page includes a persistent sidebar with three tabs:
 
@@ -91,7 +103,7 @@ The session page includes a persistent sidebar with three tabs:
 - **Combat** — live initiative order sorted by roll, HP bars that shift green → amber → red as combatants take damage, AC and initiative values, active conditions, and a scrollable combat log. Shows a "waiting for initiative roll" state when combat has just started. Auto-switches to this tab when combat begins.
 - **Log** — session stats (message count, DM responses, combat rounds), a D&D 5e quick reference card, and clickable phrase shortcuts that pre-fill the input box.
 
-### 7. Session Journal (End of Session)
+### 8. Session Journal (End of Session)
 
 When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative entry written in the voice of the player's character — capturing key events, decisions, and outcomes in first-person prose. Each journal entry is saved and can be reviewed at any time.
 
@@ -135,7 +147,7 @@ id, user_id, title, created_at, journal_entry, status, character_context
 
 ### messages
 
-Every message in a session — both player and DM — stored in order for conversation history and journal generation. The opening narration is stored here as the first assistant message when a session is created.
+Every message in a session — both player and DM — stored in order for conversation history and journal generation. The opening narration is stored here as the first assistant message when a session is created. Message content is always stored as the raw tagged string (including `[STATUS]` and `[HINTS]` blocks); parsing is handled at render time.
 
 ```
 id, session_id, role (user|assistant), content, created_at
@@ -173,7 +185,11 @@ lib/
   supabase.ts                         # Supabase client (browser + admin)
   rag.ts                              # embedText() + retrieveChunks()
   dm-prompt.ts                        # DM system prompt builder — injects combat state,
-                                      # character context, and strict turn instructions
+                                      # character context, strict turn instructions,
+                                      # and structured [STATUS]/[HINTS] output format
+  parse-dm-response.ts                # parseDMResponse() / parseDMResponsePartial() —
+                                      # splits raw DM output into narrative, statusItems,
+                                      # and hints; structured parser with freeform fallback
   combat/
     types.ts                          # Combatant, CombatState, CombatLogEntry types
     dice.ts                           # roll(), rollAttack(), rollDamage(), rollInitiative()
@@ -182,9 +198,13 @@ lib/
     encounters.ts                     # LMoP monster stat blocks, encounter definitions,
                                       # detectEncounterKey(), buildEncounterMonstersOnly()
     repository.ts                     # getCombatState(), upsertCombatState()
+components/
+  StatusCard.tsx                      # Renders [STATUS] items as a quest status card
+  HintPanel.tsx                       # Renders [HINTS] as a collapsible "What can I do?" panel
 hooks/
   useChat.ts                          # Chat state, streaming, initiative flag,
-                                      # pendingRolls parsed from DM [ROLL:] tags
+                                      # pendingRolls parsed from DM [ROLL:] tags,
+                                      # parsedDM updated live as stream arrives
 scripts/
   ingest.ts                           # One-time document ingestion pipeline
 ```
@@ -211,6 +231,29 @@ scripts/
 - `PATCH /api/combat/[id]` — Submit player initiative roll; re-sorts combatants and clears awaiting flag
 - `POST /api/journal` — End-of-session journal generation
 - `GET /api/journal/[id]` — Fetch a single session with journal entry
+
+---
+
+## DM Response Format
+
+The system prompt instructs the LLM to append two structured blocks at the end of every response. These are parsed by `lib/parse-dm-response.ts` and never shown to the player as raw text.
+
+```
+[STATUS]
+* You've gathered supplies in Phandalin
+* The Redbrands are rumored to be watching the temple
+[/STATUS]
+
+[HINTS]
+[social] Talk to the priestess | I head to the Shrine of Luck and ask the priestess for her blessing.
+[explore] Leave for the temple | I set out from Phandalin toward the lost temple.
+[lore] Ask about the Black Spider | I ask around town if anyone knows who the Black Spider is.
+[/HINTS]
+```
+
+Valid hint tags are `explore`, `social`, `action`, and `lore`. Each hint has a short display label and a full prompt string that fires into the chat when the player clicks it.
+
+If the LLM drifts from this format, the fallback parser in `parseDMResponse()` attempts to extract status items heuristically from the raw prose. Hints are only rendered for properly structured responses.
 
 ---
 
@@ -363,19 +406,20 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 
 ## Build Status
 
-| Phase | Description                                                       | Status      |
-| ----- | ----------------------------------------------------------------- | ----------- |
-| 1     | Foundation — schema, ingestion, project setup                     | ✅ Complete |
-| 2     | RAG pipeline — embed, retrieve, stream, persist                   | ✅ Complete |
-| 3     | DM logic — combat tracking, dice, NPC state                       | ✅ Complete |
-| 4     | Journal — generation, storage, list + detail views                | ✅ Complete |
-| 5     | Character creation — sheet UI, context injection                  | ✅ Complete |
-| 6     | Opening narration — immersive session intro                       | ✅ Complete |
-| 7     | Session sidebar — character stats, combat tracker, log            | ✅ Complete |
-| 8     | Player dice rolling — initiative, attacks, checks, saves, damage  | ✅ Complete |
-| 9     | Turn enforcement — monsters resolve fully before player is prompted| ✅ Complete |
-| 10    | Encounter detection — correct monsters spawned per LMoP location  | ✅ Complete |
-| 11    | Polish — UI theme, mobile, PDF export                             | 🔲 Upcoming |
+| Phase | Description                                                        | Status      |
+| ----- | ------------------------------------------------------------------ | ----------- |
+| 1     | Foundation — schema, ingestion, project setup                      | ✅ Complete |
+| 2     | RAG pipeline — embed, retrieve, stream, persist                    | ✅ Complete |
+| 3     | DM logic — combat tracking, dice, NPC state                        | ✅ Complete |
+| 4     | Journal — generation, storage, list + detail views                 | ✅ Complete |
+| 5     | Character creation — sheet UI, context injection                   | ✅ Complete |
+| 6     | Opening narration — immersive session intro                        | ✅ Complete |
+| 7     | Session sidebar — character stats, combat tracker, log             | ✅ Complete |
+| 8     | Player dice rolling — initiative, attacks, checks, saves, damage   | ✅ Complete |
+| 9     | Turn enforcement — monsters resolve fully before player is prompted | ✅ Complete |
+| 10    | Encounter detection — correct monsters spawned per LMoP location   | ✅ Complete |
+| 11    | Structured DM output — status card + hint panel for new players    | ✅ Complete |
+| 12    | Polish — UI theme, mobile, PDF export                              | 🔲 Upcoming |
 
 ---
 

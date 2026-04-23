@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { parseDMResponsePartial, parseDMResponse, ParsedDMResponse } from '@/lib/parse-dm-response'
 
 export type Message = {
   id: string;
@@ -80,6 +81,11 @@ export function useChat(sessionId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [parsedDM, setParsedDM] = useState<ParsedDMResponse>({
+  narrative: '',
+  statusItems: [],
+  hints: [],
+})
   const [error, setError] = useState<string | null>(null);
   const [awaitingInitiative, setAwaitingInitiative] = useState(false);
   const [pendingRolls, setPendingRolls] = useState<RollRequest[]>([]);
@@ -176,6 +182,8 @@ export function useChat(sessionId: string) {
 
               if (parsed.token) {
                 fullResponse += parsed.token;
+                setParsedDM(parseDMResponsePartial(fullResponse));
+
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantMsgId
@@ -186,6 +194,8 @@ export function useChat(sessionId: string) {
               }
 
               if (parsed.done) {
+                setParsedDM(parseDMResponse(fullResponse));
+
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantMsgId ? { ...m, streaming: false } : m,
@@ -219,13 +229,16 @@ export function useChat(sessionId: string) {
   const cancelStream = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
   }, []);
+
   const dismissInitiative = useCallback(() => {
     setAwaitingInitiative(false);
   }, []);
+  
   const dismissRolls = useCallback(() => {
     setPendingRolls([]);
   }, []);
@@ -234,6 +247,7 @@ export function useChat(sessionId: string) {
     messages,
     isLoading,
     isStreaming,
+    parsedDM,
     error,
     sendMessage,
     cancelStream,

@@ -25,6 +25,36 @@ function formatCombatant(c: Combatant, isCurrent: boolean): string {
   return `${marker}${c.name} (${c.type}) | ${status} | Initiative: ${c.initiative}${conditions}`;
 }
 
+const STATUS_AND_HINTS_INSTRUCTION = `
+---
+STRUCTURED OUTPUT — ALWAYS follow this format at the end of every response.
+
+After your narrative, emit two blocks:
+
+1. [STATUS] block — 2–4 bullet points summarizing the current situation the player should remember. Keep each point to one sentence. Only include things that are immediately relevant (active quests, known threats, key NPCs just mentioned).
+
+[STATUS]
+* <item one>
+* <item two>
+* <item three>
+[/STATUS]
+
+2. [HINTS] block — 3–4 things the player could do next. Format each line exactly as:
+[tag] Short label | Full sentence the player would say or do
+
+Tags must be one of: explore, social, action, lore
+
+Example:
+[HINTS]
+[social] Talk to the innkeeper | I approach the innkeeper and ask if he's heard anything about the missing miners.
+[explore] Head toward Tresendar Manor | I leave the inn and make my way toward Tresendar Manor to scope out the Redbrand hideout.
+[action] Rest and prepare spells | I find a quiet corner and take a short rest to recover my spell slots before moving on.
+[lore] Ask about the Black Spider | I ask around town whether anyone knows who the Black Spider is or what they want.
+[/HINTS]
+
+CRITICAL: The [STATUS] and [HINTS] blocks must appear at the very end of your response, after all narrative text. Never mix them into the story prose. The player will never see the raw tags — they are parsed and displayed separately.
+`
+
 function formatCombatState(state: CombatState): string {
   const currentCombatant = state.combatants[state.current_turn_index];
 
@@ -171,7 +201,7 @@ Do not ask the player to act yet. Do not advance the turn order.
 Simply confirm that combat has begun and that you are waiting for their initiative roll.`;
   }
 
-  return prompt;
+  return prompt + '\n' + STATUS_AND_HINTS_INSTRUCTION;
 }
 
 export function buildCombatStartPrompt(combatants: Combatant[]): string {
