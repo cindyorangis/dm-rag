@@ -9,9 +9,9 @@ schema: v1
 # https://docs.continue.dev/customization/models
 models:
   # Acts as your main Chat and Inline-Edit model
-  - name: qwen2.5-coder-3b
+  - name: qwen3.5:4b
     provider: ollama
-    model: qwen2.5-coder:3b
+    model: qwen3.5:4b
     apiBase: http://localhost:11434
     roles:
       - chat
