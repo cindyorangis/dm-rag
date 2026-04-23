@@ -67,6 +67,15 @@ function parseHints(block: string): HintItem[] {
     .slice(0, 4);
 }
 
+function stripTagRemnants(text: string): string {
+  return text
+    .replace(/\[HINTS\][\s\S]*$/i, "") // HINTS block with no closing tag
+    .replace(/\[STATUS\][\s\S]*$/i, "") // STATUS block with no closing tag
+    .replace(/\[\/?(?:STATUS|HINTS)\]/gi, "") // any stray open/close tags
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function parseStructured(raw: string): ParsedDMResponse | null {
   // Only attempt structured parse if we see at least one of our tags
   if (!/\[STATUS\]/i.test(raw) && !/\[HINTS\]/i.test(raw)) return null;
@@ -79,6 +88,8 @@ function parseStructured(raw: string): ParsedDMResponse | null {
     afterStatus,
     TAG_PATTERNS.hints,
   );
+
+  console.log("=== PARSED STRUCTURE ===\n", raw);
 
   return {
     narrative: narrative.trim(),
@@ -147,9 +158,14 @@ function extractFreeformStatus(raw: string): {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function parseDMResponse(raw: string): ParsedDMResponse {
+  console.log("=== RAW DM RESPONSE ===\n", raw);
   // Try structured first — clean, reliable
   const structured = parseStructured(raw);
-  if (structured) return structured;
+  if (structured)
+    return {
+      ...structured,
+      narrative: stripTagRemnants(structured.narrative),
+    };
 
   // Fall back to heuristic extraction for free-form / legacy messages
   const { statusItems, cleaned } = extractFreeformStatus(raw);

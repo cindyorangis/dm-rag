@@ -430,6 +430,7 @@ function CombatantRow({
   isCurrentTurn: boolean;
 }) {
   const pct = hpPercent(combatant.hp, combatant.max_hp);
+
   return (
     <div
       className={`rounded p-2 space-y-1.5 transition-colors ${isCurrentTurn ? "bg-amber-900/25 border border-amber-700/40" : "bg-black/20 border border-transparent"}`}
