@@ -414,7 +414,7 @@ npm run dev
 Place your source PDFs in `/scripts/books/` and run:
 
 ```bash
-npm run ingest
+python scripts/ingest.py
 ```
 
 This only needs to be run once. Chunks and embeddings are persisted in Supabase.

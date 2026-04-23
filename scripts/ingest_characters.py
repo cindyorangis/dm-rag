@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import re
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,7 @@ CHARACTER_SHEETS_DIR = Path(__file__).parent / 'character_sheets'
 CHUNK_SIZE         = 1500   # characters
 CHUNK_OVERLAP      = 150    # characters overlap between chunks
 EMBED_MODEL        = 'nomic-embed-text'  # local via Ollama, 768 dimensions
+SYSTEM_USER_ID     = os.environ['SYSTEM_USER_ID']   # Default system user ID for pregenerated character ownership
 
 # ── Clients ────────────────────────────────────────────────────────────────
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -119,22 +121,14 @@ def extract_character_info(text: str) -> Optional[CharacterData]:
         if line:
             cleaned_lines.append(line)
     
-    # Get first few lines
-    first_line = cleaned_lines[0] if len(cleaned_lines) > 0 else None
-    second_line = cleaned_lines[1] if len(cleaned_lines) > 1 else None
-    third_line = cleaned_lines[2] if len(cleaned_lines) > 2 else None
+    # Get specific lines based on your PDF structure
+    if len(cleaned_lines) >= 1:
+        character.race = cleaned_lines[0]
     
-    # Race (first line, e.g., "Human")
-    if first_line:
-        character.race = first_line
-    
-    # Class (second line, e.g., "Fighter")
-    if second_line:
-        character.class_type = second_line
-    
-    # Level (extract number from second line if it contains a number)
-    if second_line:
-        level_match = re.search(r'(\d+)', second_line)
+    if len(cleaned_lines) >= 2:
+        character.class_type = cleaned_lines[1]
+        # Extract level from line 2 (look for a number)
+        level_match = re.search(r'(\d+)', cleaned_lines[1])
         if level_match:
             character.level = int(level_match.group(1))
     
@@ -142,17 +136,38 @@ def extract_character_info(text: str) -> Optional[CharacterData]:
     if not character.name:
         character.name = f"{character.race or ''}_{character.class_type or ''}_{character.level or '1'}"
     
-    # Max HP (hit points) - look for "HP:" or "Hit Points:"
+    # Quote (lines 3-5)
+    if len(cleaned_lines) >= 3:
+        quote_text = cleaned_lines[2] + ' ' + cleaned_lines[3] + ' ' + cleaned_lines[4]
+        # Extract text inside quotation marks if present
+        if quote_text.startswith('"') or quote_text.startswith("'"):
+            quote_match = re.search(r'"([^"]+)"|\'([^\']+)\'', quote_text)
+            if quote_match:
+                character.notes = quote_match.group(1) or quote_match.group(2)
+        else:
+            character.notes = quote_text
+    
+    # Text/Description (lines 6-12)
+    if len(cleaned_lines) >= 6:
+        text_lines = cleaned_lines[5:12]  # Lines 6-12 (indices 5-11)
+        character.notes = character.notes + ' ' + ' '.join(text_lines) if character.notes else ' '.join(text_lines)
+    
+    # Background (line 13)
+    if len(cleaned_lines) >= 13:
+        character.background = cleaned_lines[12]
+    
+    # HP (hit points) - look for "HP:" or "Hit Points:" in the text
     hp_match = re.search(r'hp?\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if hp_match:
         character.max_hp = int(hp_match.group(1))
     
-    # AC (armor class) - look for "AC:" or "Armor Class:"
+    # AC (armor class) - look for "AC:" or "Armor Class:" in the text
     ac_match = re.search(r'ac\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if ac_match:
         character.ac = int(ac_match.group(1))
     
-    # Ability Scores - look for STR, DEX, CON, INT, WIS, CHA
+    # Ability Scores - look for STR, DEX, CON, INT, WIS, CHA (capitalized) in the text
+    # Pattern: STR (number) (+modifier)
     str_match = re.search(r'str\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if str_match:
         character.str = int(str_match.group(1))
@@ -176,18 +191,6 @@ def extract_character_info(text: str) -> Optional[CharacterData]:
     cha_match = re.search(r'cha\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if cha_match:
         character.cha = int(cha_match.group(1))
-    
-    # Background - look for "Background:" or similar
-    bg_match = re.search(r'background\s*[:—-]\s*([^.\n]+)', text, re.IGNORECASE)
-    if bg_match:
-        character.background = bg_match.group(1).strip()
-    
-    # Notes (slogan/quote from third line onwards)
-    if third_line and (third_line.startswith('"') or third_line.startswith("'")):
-        # Extract text inside quotation marks
-        quote_match = re.search(r'"([^"]+)"|\'([^\']+)\'', third_line)
-        if quote_match:
-            character.notes = quote_match.group(1) or quote_match.group(2)
     
     # Only return if we have meaningful data
     if not character.race and not character.class_type:
@@ -272,6 +275,7 @@ def ingest_character_sheets():
         # Insert character into characters table
         try:
             character_result = supabase.table('characters').insert({
+                'user_id': SYSTEM_USER_ID,  # Use system user ID
                 'name': character.name,
                 'race': character.race,
                 'class': character.class_type,

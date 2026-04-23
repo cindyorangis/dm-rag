@@ -13,6 +13,7 @@ if env_path.exists():
                 os.environ.setdefault(key.strip(), value.strip())
 
 import pypdf
+import re
 
 CHARACTER_SHEETS_DIR = Path(__file__).parent / 'character_sheets'
 
@@ -38,94 +39,97 @@ def debug_extract(pdf_path: Path):
         return
     
     print(f'✅ Extracted {len(pages)} page(s)')
-    print(f'\n--- Page 1 Text ---')
-    print(pages[0][1])
-    print(f'\n--- Page 1 Text (first 2000 chars) ---')
-    print(pages[0][1][:2000])
-    
-    # Try some basic regex patterns
+    print(f'\n--- Page 1 Text (first 3000 chars) ---')
     text = pages[0][1]
+    print(text[:3000])
     
-    print(f'\n--- Testing Regex Patterns ---')
+    # Show all unique lines
+    print(f'\n--- All Unique Lines (first 50) ---')
+    unique_lines = []
+    seen = set()
+    for line in text.split('\n'):
+        cleaned = line.strip().replace('"', '').replace("'", '')
+        if cleaned and cleaned not in seen:
+            unique_lines.append(cleaned)
+            seen.add(cleaned)
+            if len(unique_lines) >= 50:
+                break
+    for line in unique_lines:
+        print(f'  {line}')
     
-    # Test name
-    name_match = __import__('re').search(r'name\s*[:—-]\s*([^.\n\r]+)', text, __import__('re').IGNORECASE)
-    if name_match:
-        print(f'✅ Found name: {name_match.group(1).strip()}')
-    else:
-        print('❌ No name found')
-        # Try alternative patterns
-        print('  Trying alternative patterns...')
-        if 'Name:' in text or 'Name :' in text or 'Name :' in text:
-            print('  Found "Name:" in text')
-        if 'name:' in text.lower():
-            print('  Found "name:" in text (lowercase)')
+    # Test ability scores with more flexible patterns
+    print(f'\n--- Testing Ability Score Patterns ---')
+    text_lower = text.lower()
     
-    # Test class
-    class_match = __import__('re').search(r'class\s*[:—-]\s*([^.\n\r]+)', text, __import__('re').IGNORECASE)
-    if class_match:
-        print(f'✅ Found class: {class_match.group(1).strip()}')
-    else:
-        print('❌ No class found')
-        if 'Class:' in text or 'Class :' in text:
-            print('  Found "Class:" in text')
+    # Try different patterns for each stat
+    stat_patterns = {
+        'str': [
+            r'str\s*[:—-]?\s*(\d+)',
+            r'strength\s*[:—-]?\s*(\d+)',
+            r'str\s*[:—-]?\s*([ivx]+)',  # Roman numerals
+        ],
+        'dex': [
+            r'dex\s*[:—-]?\s*(\d+)',
+            r'dexterity\s*[:—-]?\s*(\d+)',
+        ],
+        'con': [
+            r'con\s*[:—-]?\s*(\d+)',
+            r'constitution\s*[:—-]?\s*(\d+)',
+        ],
+        'int': [
+            r'int\s*[:—-]?\s*(\d+)',
+            r'intelligence\s*[:—-]?\s*(\d+)',
+        ],
+        'wis': [
+            r'wis\s*[:—-]?\s*(\d+)',
+            r'wisdom\s*[:—-]?\s*(\d+)',
+        ],
+        'cha': [
+            r'cha\s*[:—-]?\s*(\d+)',
+            r'charisma\s*[:—-]?\s*(\d+)',
+        ],
+    }
     
-    # Test HP
-    hp_match = __import__('re').search(r'hp?\s*[:—-]?\s*(\d+)', text, __import__('re').IGNORECASE)
-    if hp_match:
-        print(f'✅ Found HP: {hp_match.group(1)}')
-    else:
-        print('❌ No HP found')
-        # Look for HP in text
-        if 'HP' in text or 'hp' in text:
-            print('  Found "HP" or "hp" in text')
-            # Show context
-            idx = text.lower().find('hp')
-            if idx != -1:
-                print(f'  Context: "{text[max(0,idx-30):idx+30]}"')
-    
-    # Test ability scores
-    stats = ['str', 'dex', 'con', 'int', 'wis', 'cha']
-    for stat in stats:
-        pattern = rf'{stat}\s*[:—-]?\s*(\d+)'
-        match = __import__('re').search(pattern, text, __import__('re').IGNORECASE)
-        if match:
-            print(f'✅ Found {stat.upper()}: {match.group(1)}')
-        else:
+    for stat in ['str', 'dex', 'con', 'int', 'wis', 'cha']:
+        found = False
+        for pattern in stat_patterns[stat]:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                print(f'✅ Found {stat.upper()}: {match.group(1)}')
+                found = True
+                break
+        if not found:
             print(f'❌ No {stat.upper()} found')
             # Check if stat is in text at all
-            if stat.upper() in text:
-                print(f'  But "{stat.upper()}" is in the text')
+            if any(keyword in text_lower for keyword in [f'{stat}:' , f'{stat} ', f'{stat}']):
+                print(f'  But "{stat}" is in the text')
+                # Show context around the stat
+                idx = text_lower.find(stat)
+                if idx != -1:
+                    context_start = max(0, idx - 50)
+                    context_end = min(len(text), idx + 50)
+                    context = text[context_start:context_end]
+                    print(f'  Context: "{context}"')
     
-    print(f'\n--- Looking for common character sheet patterns ---')
+    # Test for ability scores in any format
+    print(f'\n--- Looking for Ability Score Keywords ---')
+    keywords = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA', 'strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma']
+    for keyword in keywords:
+        if keyword in text_lower:
+            idx = text_lower.find(keyword)
+            # Show 50 chars before and after
+            context_start = max(0, idx - 30)
+            context_end = min(len(text), idx + 30)
+            context = text[context_start:context_end]
+            print(f'✅ Found "{keyword}"')
+            print(f'  Context: "{context}"')
+            break
     
-    # Look for common patterns
-    patterns = [
-        (r'Name\s*[:—-]', 'Name label'),
-        (r'Race\s*[:—-]', 'Race label'),
-        (r'Class\s*[:—-]', 'Class label'),
-        (r'Background\s*[:—-]', 'Background label'),
-        (r'HP\s*[:—-]', 'HP label'),
-        (r'AC\s*[:—-]', 'AC label'),
-        (r'Strength\s*[:—-]', 'Strength label'),
-        (r'Dexterity\s*[:—-]', 'Dexterity label'),
-        (r'Constitution\s*[:—-]', 'Constitution label'),
-        (r'Intelligence\s*[:—-]', 'Intelligence label'),
-        (r'Wisdom\s*[:—-]', 'Wisdom label'),
-        (r'Charisma\s*[:—-]', 'Charisma label'),
-    ]
-    
-    for pattern, desc in patterns:
-        if __import__('re').search(pattern, text, __import__('re').IGNORECASE):
-            print(f'✅ Found pattern: {desc}')
-        else:
-            print(f'❌ No pattern: {desc}')
-    
-    # Show first few lines
-    print(f'\n--- First 10 lines of text ---')
-    lines = text.split('\n')[:10]
+    # Show first 20 lines with line numbers
+    print(f'\n--- First 20 Lines with Line Numbers ---')
+    lines = text.split('\n')[:20]
     for i, line in enumerate(lines, 1):
-        print(f'{i}: {line}')
+        print(f'{i:3}: {line}')
 
 if __name__ == '__main__':
     pdf_files = sorted(CHARACTER_SHEETS_DIR.glob('*.pdf'))
