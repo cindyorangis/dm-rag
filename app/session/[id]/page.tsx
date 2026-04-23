@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useChat } from "@/hooks/useChat";
 import type { RollRequest } from "@/hooks/useChat";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { DMMessage, UserMessage } from "@/components/ChatMessage";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,10 @@ interface CombatState {
 
 function parseCharacterContext(ctx: string): CharacterData {
   if (!ctx) return {};
-  const lines = ctx.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = ctx
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
   const data: CharacterData = {};
   for (const line of lines) {
     if (line.startsWith("Name:")) {
@@ -60,7 +64,10 @@ function parseCharacterContext(ctx: string): CharacterData {
       continue;
     }
     if (line.startsWith("Ability scores")) {
-      for (const pair of line.replace("Ability scores —", "").trim().split("|")) {
+      for (const pair of line
+        .replace("Ability scores —", "")
+        .trim()
+        .split("|")) {
         const [stat, val] = pair.trim().split(" ");
         const key = stat?.toLowerCase() as keyof CharacterData;
         if (key && val) (data as Record<string, string>)[key] = val;
@@ -97,10 +104,6 @@ function modifier(score: string | undefined): string {
   return mod >= 0 ? `+${mod}` : `${mod}`;
 }
 
-function stripRollTags(text: string): string {
-  return text.replace(/\[ROLL:[^\]]*\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
-}
-
 function parseDiceExpression(expr: string): { sides: number; mod: number } {
   const m = expr.match(/d(\d+)([+-]\d+)?/i);
   if (!m) return { sides: 20, mod: 0 };
@@ -128,9 +131,11 @@ function DiceRoller({
 }) {
   const [rolling, setRolling] = useState(false);
   const [displayNum, setDisplayNum] = useState<number | null>(null);
-  const [result, setResult] = useState<{ natural: number; total: number } | null>(null);
+  const [result, setResult] = useState<{
+    natural: number;
+    total: number;
+  } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-
   const { sides, mod } = parseDiceExpression(request.dice);
 
   const handleRoll = () => {
@@ -171,34 +176,21 @@ function DiceRoller({
 
   return (
     <div
-      className={`border rounded-lg p-4 space-y-3 transition-all duration-500 ${
-        confirmed
-          ? "border-amber-700/20 bg-stone-900/20 opacity-40"
-          : "border-amber-700/50 bg-gradient-to-b from-amber-950/25 to-stone-900/40"
-      }`}
+      className={`border rounded-lg p-4 space-y-3 transition-all duration-500 ${confirmed ? "border-amber-700/20 bg-stone-900/20 opacity-40" : "border-amber-700/50 bg-gradient-to-b from-amber-950/25 to-stone-900/40"}`}
     >
       <div className="flex items-center gap-2">
         <span className="text-[0.55rem] tracking-widest uppercase text-amber-800/70 font-sans bg-amber-950/30 border border-amber-900/40 px-2 py-0.5 rounded">
           {request.type}
         </span>
-        <span className="text-stone-400 font-serif text-sm">{request.label}</span>
+        <span className="text-stone-400 font-serif text-sm">
+          {request.label}
+        </span>
       </div>
-
       <div className="flex items-center gap-4">
         <button
           onClick={handleRoll}
           disabled={!!result || rolling}
-          className={`w-14 h-14 rounded-lg border-2 flex items-center justify-center font-serif text-xl font-bold transition-all select-none shrink-0 ${
-            result
-              ? isCrit
-                ? "border-yellow-400 bg-yellow-950/40 text-yellow-300"
-                : isFumble
-                ? "border-red-700 bg-red-950/40 text-red-400"
-                : "border-amber-600/50 bg-amber-950/20 text-amber-200"
-              : rolling
-              ? "border-amber-700/60 bg-amber-950/20 text-amber-400 animate-pulse cursor-wait"
-              : "border-stone-600 bg-stone-800/50 text-stone-400 hover:border-amber-600/60 hover:text-amber-300 hover:bg-amber-950/15 cursor-pointer active:scale-95"
-          }`}
+          className={`w-14 h-14 rounded-lg border-2 flex items-center justify-center font-serif text-xl font-bold transition-all select-none shrink-0 ${result ? (isCrit ? "border-yellow-400 bg-yellow-950/40 text-yellow-300" : isFumble ? "border-red-700 bg-red-950/40 text-red-400" : "border-amber-600/50 bg-amber-950/20 text-amber-200") : rolling ? "border-amber-700/60 bg-amber-950/20 text-amber-400 animate-pulse cursor-wait" : "border-stone-600 bg-stone-800/50 text-stone-400 hover:border-amber-600/60 hover:text-amber-300 hover:bg-amber-950/15 cursor-pointer active:scale-95"}`}
         >
           {displayNum !== null ? (
             <span className={rolling ? "opacity-50" : ""}>{displayNum}</span>
@@ -206,26 +198,22 @@ function DiceRoller({
             <span className="text-stone-500 text-sm">d{sides}</span>
           )}
         </button>
-
         <div className="flex-1 min-w-0">
           {result ? (
             <div className="space-y-0.5">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <span
-                  className={`font-serif text-2xl font-bold ${
-                    isCrit ? "text-yellow-300" : isFumble ? "text-red-400" : "text-amber-200"
-                  }`}
+                  className={`font-serif text-2xl font-bold ${isCrit ? "text-yellow-300" : isFumble ? "text-red-400" : "text-amber-200"}`}
                 >
                   {result.total}
                 </span>
                 <span className="text-stone-500 text-xs font-sans">
-                  ({result.natural} {mod >= 0 ? "+" : ""}{mod})
+                  ({result.natural} {mod >= 0 ? "+" : ""}
+                  {mod})
                 </span>
                 {request.targetAC !== undefined && (
                   <span
-                    className={`text-xs font-serif ${
-                      result.total >= request.targetAC ? "text-emerald-400" : "text-red-400"
-                    }`}
+                    className={`text-xs font-serif ${result.total >= request.targetAC ? "text-emerald-400" : "text-red-400"}`}
                   >
                     {result.total >= request.targetAC ? "✓ HIT" : "✗ MISS"}
                   </span>
@@ -233,19 +221,21 @@ function DiceRoller({
                 {(request.type === "check" || request.type === "save") &&
                   request.dc !== undefined && (
                     <span
-                      className={`text-xs font-serif ${
-                        result.total >= request.dc ? "text-emerald-400" : "text-red-400"
-                      }`}
+                      className={`text-xs font-serif ${result.total >= request.dc ? "text-emerald-400" : "text-red-400"}`}
                     >
                       {result.total >= request.dc ? "✓ SUCCESS" : "✗ FAIL"}
                     </span>
                   )}
               </div>
               {isCrit && (
-                <p className="text-yellow-400/80 text-xs font-serif italic">✦ Critical hit!</p>
+                <p className="text-yellow-400/80 text-xs font-serif italic">
+                  ✦ Critical hit!
+                </p>
               )}
               {isFumble && (
-                <p className="text-red-400/70 text-xs font-serif italic">A fumble…</p>
+                <p className="text-red-400/70 text-xs font-serif italic">
+                  A fumble…
+                </p>
               )}
             </div>
           ) : (
@@ -254,7 +244,6 @@ function DiceRoller({
             </p>
           )}
         </div>
-
         {result && !confirmed && (
           <button
             onClick={handleConfirm}
@@ -264,7 +253,9 @@ function DiceRoller({
           </button>
         )}
         {confirmed && (
-          <span className="text-amber-700/50 text-xs font-serif italic shrink-0">Sent</span>
+          <span className="text-amber-700/50 text-xs font-serif italic shrink-0">
+            Sent
+          </span>
         )}
       </div>
     </div>
@@ -282,7 +273,10 @@ function InitiativeRoller({
 }) {
   const [rolling, setRolling] = useState(false);
   const [displayNum, setDisplayNum] = useState<number | null>(null);
-  const [result, setResult] = useState<{ natural: number; total: number } | null>(null);
+  const [result, setResult] = useState<{
+    natural: number;
+    total: number;
+  } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
 
   const handleRoll = () => {
@@ -310,18 +304,17 @@ function InitiativeRoller({
 
   return (
     <div
-      className={`my-4 max-w-2xl mx-auto border rounded-lg p-5 space-y-4 transition-all duration-500 ${
-        confirmed
-          ? "border-amber-700/20 bg-stone-900/20 opacity-40"
-          : "border-amber-700/60 bg-gradient-to-b from-amber-950/30 to-stone-900/50"
-      }`}
+      className={`my-4 max-w-2xl mx-auto border rounded-lg p-5 space-y-4 transition-all duration-500 ${confirmed ? "border-amber-700/20 bg-stone-900/20 opacity-40" : "border-amber-700/60 bg-gradient-to-b from-amber-950/30 to-stone-900/50"}`}
     >
       <div className="flex items-center gap-3">
         <div className="w-px h-8 bg-amber-800/40" />
         <div>
-          <p className="font-serif text-amber-300 text-sm">Roll for Initiative!</p>
+          <p className="font-serif text-amber-300 text-sm">
+            Roll for Initiative!
+          </p>
           <p className="text-stone-500 text-xs mt-0.5">
-            d20 {dexMod >= 0 ? `+ ${dexMod}` : `− ${Math.abs(dexMod)}`} (DEX modifier)
+            d20 {dexMod >= 0 ? `+ ${dexMod}` : `− ${Math.abs(dexMod)}`} (DEX
+            modifier)
           </p>
         </div>
       </div>
@@ -329,17 +322,7 @@ function InitiativeRoller({
         <button
           onClick={handleRoll}
           disabled={!!result || rolling}
-          className={`w-16 h-16 rounded-lg border-2 flex items-center justify-center font-serif text-2xl font-bold transition-all select-none ${
-            result
-              ? result.natural === 20
-                ? "border-yellow-400 bg-yellow-950/40 text-yellow-300"
-                : result.natural === 1
-                ? "border-red-700 bg-red-950/40 text-red-400"
-                : "border-amber-600/60 bg-amber-950/20 text-amber-200"
-              : rolling
-              ? "border-amber-700/80 bg-amber-950/30 text-amber-300 animate-pulse cursor-wait"
-              : "border-stone-600 bg-stone-800/60 text-stone-400 hover:border-amber-600/70 hover:text-amber-300 cursor-pointer active:scale-95"
-          }`}
+          className={`w-16 h-16 rounded-lg border-2 flex items-center justify-center font-serif text-2xl font-bold transition-all select-none ${result ? (result.natural === 20 ? "border-yellow-400 bg-yellow-950/40 text-yellow-300" : result.natural === 1 ? "border-red-700 bg-red-950/40 text-red-400" : "border-amber-600/60 bg-amber-950/20 text-amber-200") : rolling ? "border-amber-700/80 bg-amber-950/30 text-amber-300 animate-pulse cursor-wait" : "border-stone-600 bg-stone-800/60 text-stone-400 hover:border-amber-600/70 hover:text-amber-300 cursor-pointer active:scale-95"}`}
         >
           {displayNum !== null ? (
             <span className={rolling ? "opacity-60" : ""}>{displayNum}</span>
@@ -352,18 +335,13 @@ function InitiativeRoller({
             <div>
               <div className="flex items-baseline gap-2">
                 <span
-                  className={`font-serif text-3xl font-bold ${
-                    result.natural === 20
-                      ? "text-yellow-300"
-                      : result.natural === 1
-                      ? "text-red-400"
-                      : "text-amber-200"
-                  }`}
+                  className={`font-serif text-3xl font-bold ${result.natural === 20 ? "text-yellow-300" : result.natural === 1 ? "text-red-400" : "text-amber-200"}`}
                 >
                   {result.total}
                 </span>
                 <span className="text-stone-500 text-sm">
-                  ({result.natural} {dexMod >= 0 ? "+" : ""}{dexMod})
+                  ({result.natural} {dexMod >= 0 ? "+" : ""}
+                  {dexMod})
                 </span>
               </div>
               {result.natural === 20 && (
@@ -372,7 +350,9 @@ function InitiativeRoller({
                 </p>
               )}
               {result.natural === 1 && (
-                <p className="text-red-400/70 text-xs font-serif italic">A poor start…</p>
+                <p className="text-red-400/70 text-xs font-serif italic">
+                  A poor start…
+                </p>
               )}
             </div>
           ) : (
@@ -390,7 +370,9 @@ function InitiativeRoller({
           </button>
         )}
         {confirmed && (
-          <span className="text-amber-600/60 text-xs font-serif italic">Locked in</span>
+          <span className="text-amber-600/60 text-xs font-serif italic">
+            Locked in
+          </span>
         )}
       </div>
     </div>
@@ -450,11 +432,7 @@ function CombatantRow({
   const pct = hpPercent(combatant.hp, combatant.max_hp);
   return (
     <div
-      className={`rounded p-2 space-y-1.5 transition-colors ${
-        isCurrentTurn
-          ? "bg-amber-900/25 border border-amber-700/40"
-          : "bg-black/20 border border-transparent"
-      }`}
+      className={`rounded p-2 space-y-1.5 transition-colors ${isCurrentTurn ? "bg-amber-900/25 border border-amber-700/40" : "bg-black/20 border border-transparent"}`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -462,9 +440,7 @@ function CombatantRow({
             <span className="text-amber-400 text-[0.6rem] shrink-0">▶</span>
           )}
           <span
-            className={`font-serif text-sm truncate ${
-              combatant.type === "player" ? "text-amber-300" : "text-stone-300"
-            }`}
+            className={`font-serif text-sm truncate ${combatant.type === "player" ? "text-amber-300" : "text-stone-300"}`}
           >
             {combatant.name}
           </span>
@@ -515,6 +491,7 @@ export default function SessionPage() {
     messages,
     isLoading,
     isStreaming,
+    parsedDM,
     error,
     sendMessage,
     cancelStream,
@@ -529,7 +506,7 @@ export default function SessionPage() {
   const [character, setCharacter] = useState<CharacterData>({});
   const [combatState, setCombatState] = useState<CombatState | null>(null);
   const [sidebarTab, setSidebarTab] = useState<"character" | "combat" | "log">(
-    "character"
+    "character",
   );
   const [isEndingSession, setIsEndingSession] = useState(false);
 
@@ -558,16 +535,13 @@ export default function SessionPage() {
   useEffect(() => {
     fetchSessionData();
   }, [fetchSessionData]);
-
   useEffect(() => {
     if (!isStreaming) fetchSessionData();
   }, [isStreaming, fetchSessionData]);
-
   useEffect(() => {
     if (combatState?.is_active && !combatState.awaiting_player_initiative)
       setSidebarTab("combat");
   }, [combatState?.is_active, combatState?.awaiting_player_initiative]);
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, awaitingInitiative, pendingRolls]);
@@ -593,17 +567,15 @@ export default function SessionPage() {
         dismissInitiative();
       }
     },
-    [id, dismissInitiative]
+    [id, dismissInitiative],
   );
-
-  // ── Dice roll result — send back to DM as a player message ─────────────────
 
   const handleRollResult = useCallback(
     (resultText: string) => {
       dismissRolls();
       sendMessage(resultText);
     },
-    [dismissRolls, sendMessage]
+    [dismissRolls, sendMessage],
   );
 
   // ── End session ─────────────────────────────────────────────────────────────
@@ -649,31 +621,33 @@ export default function SessionPage() {
     ? Math.floor((parseInt(character.dex) - 10) / 2)
     : 0;
 
+  // The last assistant message that is actively streaming
+  const streamingMsgId = messages.find((m) => m.streaming)?.id ?? null;
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex h-screen bg-stone-950 text-stone-100 overflow-hidden">
-
       {/* ── Chat column ────────────────────────────────────────────────────── */}
       <div className="flex flex-col flex-1 min-w-0">
-
         {/* Header */}
         <div className="border-b border-stone-800 px-4 py-3 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
             <h1 className="font-serif text-amber-400 text-sm tracking-widest uppercase">
               Lost Mine of Phandelver
             </h1>
-            {combatState?.is_active && !combatState.awaiting_player_initiative && (
-              <span className="text-[0.55rem] bg-red-950/70 border border-red-800/60 text-red-400 px-2 py-0.5 rounded uppercase tracking-widest animate-pulse">
-                ⚔ Combat — Round {combatState.round}
-              </span>
-            )}
+            {combatState?.is_active &&
+              !combatState.awaiting_player_initiative && (
+                <span className="text-[0.55rem] bg-red-950/70 border border-red-800/60 text-red-400 px-2 py-0.5 rounded uppercase tracking-widest animate-pulse">
+                  ⚔ Combat — Round {combatState.round}
+                </span>
+              )}
           </div>
           <div className="flex items-center gap-4">
             <button
               onClick={() =>
                 sendMessage(
-                  "Who am I? Please describe my character — name, race, class, level, and key stats."
+                  "Who am I? Please describe my character — name, race, class, level, and key stats.",
                 )
               }
               disabled={isStreaming}
@@ -703,29 +677,23 @@ export default function SessionPage() {
             </p>
           ) : null}
 
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`max-w-2xl mx-auto ${
-                msg.role === "user" ? "text-right" : "text-left"
-              }`}
-            >
-              {msg.role === "assistant" ? (
-                <div className="prose prose-invert prose-stone max-w-none font-serif text-stone-200 leading-relaxed">
-                  {stripRollTags(msg.content)}
-                  {msg.streaming && (
-                    <span className="inline-block w-2 h-4 ml-1 bg-amber-400 animate-pulse" />
-                  )}
-                </div>
-              ) : (
-                <span className="inline-block bg-stone-800 text-stone-300 px-4 py-2 rounded-lg text-sm">
-                  {msg.content}
-                </span>
-              )}
-            </div>
-          ))}
+          {messages.map((msg) =>
+            msg.role === "user" ? (
+              <UserMessage key={msg.id} message={msg} />
+            ) : (
+              <DMMessage
+                key={msg.id}
+                message={msg}
+                // Only pass parsedDM for the actively streaming message
+                streamingParsed={
+                  msg.id === streamingMsgId ? parsedDM : undefined
+                }
+                onHintSelect={(prompt: string) => sendMessage(prompt)}
+              />
+            ),
+          )}
 
-          {/* Initiative roller — appears inline after combat starts */}
+          {/* Initiative roller */}
           {awaitingInitiative && !isStreaming && (
             <InitiativeRoller dexMod={dexMod} onRoll={handleInitiativeRoll} />
           )}
@@ -743,9 +711,7 @@ export default function SessionPage() {
             </div>
           )}
 
-          {error && (
-            <p className="text-center text-red-400 text-sm">{error}</p>
-          )}
+          {error && <p className="text-center text-red-400 text-sm">{error}</p>}
           <div ref={bottomRef} />
         </div>
 
@@ -791,7 +757,6 @@ export default function SessionPage() {
 
       {/* ── Sidebar ──────────────────────────────────────────────────────────── */}
       <div className="w-72 shrink-0 border-l border-stone-800 flex flex-col bg-stone-950/80 overflow-hidden">
-
         {/* Tab bar */}
         <div className="flex border-b border-stone-800 shrink-0">
           {(
@@ -804,11 +769,7 @@ export default function SessionPage() {
             <button
               key={tab.key}
               onClick={() => setSidebarTab(tab.key)}
-              className={`flex-1 py-2.5 text-[0.6rem] tracking-widest uppercase font-sans transition-colors relative ${
-                sidebarTab === tab.key
-                  ? "text-amber-400 bg-stone-900/50"
-                  : "text-stone-600 hover:text-stone-400"
-              }`}
+              className={`flex-1 py-2.5 text-[0.6rem] tracking-widest uppercase font-sans transition-colors relative ${sidebarTab === tab.key ? "text-amber-400 bg-stone-900/50" : "text-stone-600 hover:text-stone-400"}`}
             >
               {tab.label}
               {tab.key === "combat" && combatState?.is_active && (
@@ -823,7 +784,6 @@ export default function SessionPage() {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
-
           {/* CHARACTER TAB */}
           {sidebarTab === "character" && (
             <>
@@ -835,7 +795,7 @@ export default function SessionPage() {
                   <button
                     onClick={() =>
                       sendMessage(
-                        "Who am I? Please describe my character — name, race, class, level, HP, AC, and ability scores."
+                        "Who am I? Please describe my character — name, race, class, level, HP, AC, and ability scores.",
                       )
                     }
                     disabled={isStreaming}
@@ -865,7 +825,6 @@ export default function SessionPage() {
                       )}
                     </div>
                   </SidebarSection>
-
                   {(character.hp || character.ac) && (
                     <SidebarSection title="Combat Stats">
                       <div className="flex gap-3">
@@ -892,7 +851,6 @@ export default function SessionPage() {
                       </div>
                     </SidebarSection>
                   )}
-
                   {STATS.some((s) => character[s]) && (
                     <SidebarSection title="Ability Scores">
                       <div className="grid grid-cols-3 gap-1.5">
@@ -907,7 +865,6 @@ export default function SessionPage() {
                       </div>
                     </SidebarSection>
                   )}
-
                   {character.notes && (
                     <SidebarSection title="Notes">
                       <p className="text-stone-400 font-serif italic text-xs leading-relaxed">
@@ -959,7 +916,6 @@ export default function SessionPage() {
                         ))}
                     </div>
                   </SidebarSection>
-
                   {combatState.log?.length > 0 && (
                     <SidebarSection title="Combat Log">
                       <div className="space-y-1 max-h-40 overflow-y-auto">
@@ -991,20 +947,26 @@ export default function SessionPage() {
               <SidebarSection title="Session Stats">
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-stone-500 text-xs font-sans">Messages</span>
+                    <span className="text-stone-500 text-xs font-sans">
+                      Messages
+                    </span>
                     <span className="text-amber-400/80 font-serif text-sm">
                       {messages.length}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500 text-xs font-sans">DM Responses</span>
+                    <span className="text-stone-500 text-xs font-sans">
+                      DM Responses
+                    </span>
                     <span className="text-amber-400/80 font-serif text-sm">
                       {messages.filter((m) => m.role === "assistant").length}
                     </span>
                   </div>
                   {combatState && (
                     <div className="flex justify-between">
-                      <span className="text-stone-500 text-xs font-sans">Combat Rounds</span>
+                      <span className="text-stone-500 text-xs font-sans">
+                        Combat Rounds
+                      </span>
                       <span className="text-amber-400/80 font-serif text-sm">
                         {combatState.round}
                       </span>
@@ -1012,40 +974,38 @@ export default function SessionPage() {
                   )}
                 </div>
               </SidebarSection>
-
               <SidebarSection title="Quick Reference">
                 <div className="space-y-2 text-xs font-serif text-stone-500">
                   <p>
-                    <span className="text-amber-800/70">Attack roll:</span> d20 +
-                    ability mod + proficiency
+                    <span className="text-amber-800/70">Attack roll:</span> d20
+                    + ability mod + proficiency
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Saving throw:</span> d20 +
-                    ability mod
+                    <span className="text-amber-800/70">Saving throw:</span> d20
+                    + ability mod
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Advantage:</span> roll 2d20,
-                    take higher
+                    <span className="text-amber-800/70">Advantage:</span> roll
+                    2d20, take higher
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Disadvantage:</span> roll
-                    2d20, take lower
+                    <span className="text-amber-800/70">Disadvantage:</span>{" "}
+                    roll 2d20, take lower
                   </p>
                   <p>
                     <span className="text-amber-800/70">Death saves:</span> 3
                     successes stable, 3 fails dead
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Short rest:</span> spend Hit
-                    Dice to heal
+                    <span className="text-amber-800/70">Short rest:</span> spend
+                    Hit Dice to heal
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Long rest:</span> regain all
-                    HP + half Hit Dice
+                    <span className="text-amber-800/70">Long rest:</span> regain
+                    all HP + half Hit Dice
                   </p>
                 </div>
               </SidebarSection>
-
               <SidebarSection title="Useful Phrases">
                 <div className="space-y-1.5">
                   {[

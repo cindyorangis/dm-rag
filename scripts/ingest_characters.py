@@ -39,9 +39,14 @@ class CharacterData:
         race: Optional[str] = None,
         class_type: Optional[str] = None,
         background: Optional[str] = None,
-        hp: Optional[int] = None,
+        max_hp: Optional[int] = None,
         ac: Optional[int] = None,
-        stats: Optional[dict] = None,
+        str: Optional[int] = None,
+        dex: Optional[int] = None,
+        con: Optional[int] = None,
+        int: Optional[int] = None,
+        wis: Optional[int] = None,
+        cha: Optional[int] = None,
         level: Optional[int] = None,
         notes: Optional[str] = None,
         source_pdf: Optional[str] = None,
@@ -50,9 +55,14 @@ class CharacterData:
         self.race = race
         self.class_type = class_type
         self.background = background
-        self.hp = hp
+        self.max_hp = max_hp
         self.ac = ac
-        self.stats = stats or {'str': 10, 'dex': 10, 'con': 10, 'int': 10, 'wis': 10, 'cha': 10}
+        self.str = str
+        self.dex = dex
+        self.con = con
+        self.int = int
+        self.wis = wis
+        self.cha = cha
         self.level = level
         self.notes = notes
         self.source_pdf = source_pdf
@@ -132,56 +142,40 @@ def extract_character_info(text: str) -> Optional[CharacterData]:
     if not character.name:
         character.name = f"{character.race or ''}_{character.class_type or ''}_{character.level or '1'}"
     
-    # HP (hit points) - look for "HP:" or "Hit Points:"
+    # Max HP (hit points) - look for "HP:" or "Hit Points:"
     hp_match = re.search(r'hp?\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if hp_match:
-        character.hp = int(hp_match.group(1))
+        character.max_hp = int(hp_match.group(1))
     
     # AC (armor class) - look for "AC:" or "Armor Class:"
     ac_match = re.search(r'ac\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
     if ac_match:
         character.ac = int(ac_match.group(1))
     
-    # Build stats dictionary (instead of individual columns)
-    character.stats = {
-        'str': 10,
-        'dex': 10,
-        'con': 10,
-        'int': 10,
-        'wis': 10,
-        'cha': 10
-    }
-    
     # Ability Scores - look for STR, DEX, CON, INT, WIS, CHA
-    if 'str' in text.lower():
-        str_match = re.search(r'str\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if str_match:
-            character.stats['str'] = int(str_match.group(1))
+    str_match = re.search(r'str\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if str_match:
+        character.str = int(str_match.group(1))
     
-    if 'dex' in text.lower():
-        dex_match = re.search(r'dex\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if dex_match:
-            character.stats['dex'] = int(dex_match.group(1))
+    dex_match = re.search(r'dex\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if dex_match:
+        character.dex = int(dex_match.group(1))
     
-    if 'con' in text.lower():
-        con_match = re.search(r'con\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if con_match:
-            character.stats['con'] = int(con_match.group(1))
+    con_match = re.search(r'con\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if con_match:
+        character.con = int(con_match.group(1))
     
-    if 'int' in text.lower():
-        int_match = re.search(r'int\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if int_match:
-            character.stats['int'] = int(int_match.group(1))
+    int_match = re.search(r'int\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if int_match:
+        character.int = int(int_match.group(1))
     
-    if 'wis' in text.lower():
-        wis_match = re.search(r'wis\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if wis_match:
-            character.stats['wis'] = int(wis_match.group(1))
+    wis_match = re.search(r'wis\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if wis_match:
+        character.wis = int(wis_match.group(1))
     
-    if 'cha' in text.lower():
-        cha_match = re.search(r'cha\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
-        if cha_match:
-            character.stats['cha'] = int(cha_match.group(1))
+    cha_match = re.search(r'cha\s*[:—-]?\s*(\d+)', text, re.IGNORECASE)
+    if cha_match:
+        character.cha = int(cha_match.group(1))
     
     # Background - look for "Background:" or similar
     bg_match = re.search(r'background\s*[:—-]\s*([^.\n]+)', text, re.IGNORECASE)
@@ -269,8 +263,8 @@ def ingest_character_sheets():
 
         # Embed the character context for RAG
         character_context_text = f"{character.name or ''} {character.race or ''} {character.class_type or ''} {character.background or ''}"
-        if character.hp:
-            character_context_text += f" HP {character.hp}"
+        if character.max_hp:
+            character_context_text += f" Max HP {character.max_hp}"
         if character.ac:
             character_context_text += f" AC {character.ac}"
         character_context_embedding = get_embedding(character_context_text)
@@ -282,9 +276,14 @@ def ingest_character_sheets():
                 'race': character.race,
                 'class': character.class_type,
                 'background': character.background,
-                'hp': character.hp,
+                'max_hp': character.max_hp,
                 'ac': character.ac,
-                'stats': character.stats,  # Insert stats as JSON
+                'str': character.str,
+                'dex': character.dex,
+                'con': character.con,
+                'int': character.int,
+                'wis': character.wis,
+                'cha': character.cha,
                 'level': character.level,
                 'notes': character.notes,
                 'source_pdf': character.source_pdf,
@@ -302,11 +301,11 @@ def ingest_character_sheets():
             
             print(f'  ✅ Character "{character.name}" ingested successfully (id: {character_id})')
             print(f'     Class: {character.class_type}')
-            if character.hp:
-                print(f'     HP: {character.hp}')
+            if character.max_hp:
+                print(f'     Max HP: {character.max_hp}')
             if character.ac:
                 print(f'     AC: {character.ac}')
-            print(f'     Stats: {character.stats}\n')
+            print(f'     Stats: STR {character.str}, DEX {character.dex}, CON {character.con}, INT {character.int}, WIS {character.wis}, CHA {character.cha}\n')
             
         except Exception as e:
             print(f'\n  ❌ Error inserting character {character.name}: {e}')

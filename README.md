@@ -77,6 +77,8 @@ Every DM response is structured into three parts via prompt instructions and par
 
 The raw tagged string is always stored in Supabase. Parsing is display-only, so journal generation, conversation history injection, and combat parsing all continue to operate on the full content unchanged.
 
+Each DM message is rendered by `DMMessage` in `components/ChatMessage.tsx`, which calls `parseDMResponse(message.content)` at render time for historical messages and uses the hook's live `parsedDM` state for the actively streaming message. This ensures `[STATUS]` and `[HINTS]` are never shown as raw text — for new messages or messages loaded from the database.
+
 A two-pass fallback parser handles legacy messages and cases where the LLM drifts from the format: pass 1 catches labeled blocks like `Combat State: * ...`; pass 2 catches status-flavored sentences at paragraph boundaries. Hints are only rendered for structured responses.
 
 ### 6. Combat System
@@ -199,6 +201,8 @@ lib/
                                       # detectEncounterKey(), buildEncounterMonstersOnly()
     repository.ts                     # getCombatState(), upsertCombatState()
 components/
+  ChatMessage.tsx                     # DMMessage + UserMessage — parses raw DM content
+                                      # at render time; uses hook's parsedDM for live stream
   StatusCard.tsx                      # Renders [STATUS] items as a quest status card
   HintPanel.tsx                       # Renders [HINTS] as a collapsible "What can I do?" panel
 hooks/
@@ -251,7 +255,19 @@ The system prompt instructs the LLM to append two structured blocks at the end o
 [/HINTS]
 ```
 
-Valid hint tags are `explore`, `social`, `action`, and `lore`. Each hint has a short display label and a full prompt string that fires into the chat when the player clicks it.
+Valid hint tags are `explore`, `social`, `action`, and `lore`. Each hint has a short display label (`text`) and a full prompt string (`prompt`) that fires into the chat when the player clicks it.
+
+`parseDMResponse()` returns a `ParsedDMResponse` with three fields:
+
+```ts
+interface ParsedDMResponse {
+  narrative: string; // pure story prose, [STATUS]/[HINTS] stripped
+  statusItems: string[]; // bullet items from [STATUS]
+  hints: HintItem[]; // { tag, text, prompt } from [HINTS]
+}
+```
+
+`DMMessage` in `components/ChatMessage.tsx` calls this at render time for every message. The actively streaming message uses `parseDMResponsePartial()` via `parsedDM` from `useChat`, which exposes the narrative live as tokens arrive while holding back incomplete tag blocks.
 
 If the LLM drifts from this format, the fallback parser in `parseDMResponse()` attempts to extract status items heuristically from the raw prose. Hints are only rendered for properly structured responses.
 
@@ -349,6 +365,7 @@ alter table sessions add column if not exists character_context text;
 ```
 
 > **Note:** If you created the `combat_state` table before the initiative roll feature was added, run this migration:
+>
 > ```sql
 > alter table combat_state
 >   add column if not exists awaiting_player_initiative boolean default false;
@@ -406,20 +423,20 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 
 ## Build Status
 
-| Phase | Description                                                        | Status      |
-| ----- | ------------------------------------------------------------------ | ----------- |
-| 1     | Foundation — schema, ingestion, project setup                      | ✅ Complete |
-| 2     | RAG pipeline — embed, retrieve, stream, persist                    | ✅ Complete |
-| 3     | DM logic — combat tracking, dice, NPC state                        | ✅ Complete |
-| 4     | Journal — generation, storage, list + detail views                 | ✅ Complete |
-| 5     | Character creation — sheet UI, context injection                   | ✅ Complete |
-| 6     | Opening narration — immersive session intro                        | ✅ Complete |
-| 7     | Session sidebar — character stats, combat tracker, log             | ✅ Complete |
-| 8     | Player dice rolling — initiative, attacks, checks, saves, damage   | ✅ Complete |
+| Phase | Description                                                         | Status      |
+| ----- | ------------------------------------------------------------------- | ----------- |
+| 1     | Foundation — schema, ingestion, project setup                       | ✅ Complete |
+| 2     | RAG pipeline — embed, retrieve, stream, persist                     | ✅ Complete |
+| 3     | DM logic — combat tracking, dice, NPC state                         | ✅ Complete |
+| 4     | Journal — generation, storage, list + detail views                  | ✅ Complete |
+| 5     | Character creation — sheet UI, context injection                    | ✅ Complete |
+| 6     | Opening narration — immersive session intro                         | ✅ Complete |
+| 7     | Session sidebar — character stats, combat tracker, log              | ✅ Complete |
+| 8     | Player dice rolling — initiative, attacks, checks, saves, damage    | ✅ Complete |
 | 9     | Turn enforcement — monsters resolve fully before player is prompted | ✅ Complete |
-| 10    | Encounter detection — correct monsters spawned per LMoP location   | ✅ Complete |
-| 11    | Structured DM output — status card + hint panel for new players    | ✅ Complete |
-| 12    | Polish — UI theme, mobile, PDF export                              | 🔲 Upcoming |
+| 10    | Encounter detection — correct monsters spawned per LMoP location    | ✅ Complete |
+| 11    | Structured DM output — status card + hint panel for new players     | ✅ Complete |
+| 12    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 

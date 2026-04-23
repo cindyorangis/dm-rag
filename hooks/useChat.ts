@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { parseDMResponsePartial, parseDMResponse, ParsedDMResponse } from '@/lib/parse-dm-response'
+import {
+  parseDMResponsePartial,
+  parseDMResponse,
+  ParsedDMResponse,
+} from "@/lib/parse-dm-response";
 
 export type Message = {
   id: string;
@@ -82,10 +86,10 @@ export function useChat(sessionId: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [parsedDM, setParsedDM] = useState<ParsedDMResponse>({
-  narrative: '',
-  statusItems: [],
-  hints: [],
-})
+    narrative: "",
+    statusItems: [],
+    hints: [],
+  });
   const [error, setError] = useState<string | null>(null);
   const [awaitingInitiative, setAwaitingInitiative] = useState(false);
   const [pendingRolls, setPendingRolls] = useState<RollRequest[]>([]);
@@ -238,7 +242,7 @@ export function useChat(sessionId: string) {
   const dismissInitiative = useCallback(() => {
     setAwaitingInitiative(false);
   }, []);
-  
+
   const dismissRolls = useCallback(() => {
     setPendingRolls([]);
   }, []);

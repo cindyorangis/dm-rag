@@ -53,7 +53,7 @@ Example:
 [/HINTS]
 
 CRITICAL: The [STATUS] and [HINTS] blocks must appear at the very end of your response, after all narrative text. Never mix them into the story prose. The player will never see the raw tags — they are parsed and displayed separately.
-`
+`;
 
 function formatCombatState(state: CombatState): string {
   const currentCombatant = state.combatants[state.current_turn_index];
@@ -201,7 +201,7 @@ Do not ask the player to act yet. Do not advance the turn order.
 Simply confirm that combat has begun and that you are waiting for their initiative roll.`;
   }
 
-  return prompt + '\n' + STATUS_AND_HINTS_INSTRUCTION;
+  return prompt + "\n" + STATUS_AND_HINTS_INSTRUCTION;
 }
 
 export function buildCombatStartPrompt(combatants: Combatant[]): string {
