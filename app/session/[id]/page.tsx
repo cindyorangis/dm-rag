@@ -6,8 +6,8 @@ import {
   parseCharacterContext,
   modifier,
   CharacterData,
-  CombatState,
 } from "@/lib/character";
+import { CombatState } from "@/lib/combat/types";
 import { useChat } from "@/hooks/useChat";
 import DiceRoller from "../components/DiceRoller";
 import InitiativeRoller from "../components/InitiativeRoller";
