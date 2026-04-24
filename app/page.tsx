@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 type Screen = "home" | "character";
+type CharacterTab = "premade" | "custom";
 
 interface CharacterFields {
   name: string;
@@ -20,6 +21,36 @@ interface CharacterFields {
   wis: string;
   cha: string;
   notes: string;
+}
+
+// Matches the characters table schema
+interface PremadeCharacter {
+  id: string;
+  name: string;
+  race: string | null;
+  class: string | null;
+  level: number | null;
+  background: string | null;
+  alignment: string | null;
+  str: number | null;
+  dex: number | null;
+  con: number | null;
+  int: number | null;
+  wis: number | null;
+  cha: number | null;
+  ac: number | null;
+  max_hp: number | null;
+  speed: number | null;
+  hit_dice: string | null;
+  personality_traits: string | null;
+  ideals: string | null;
+  bonds: string | null;
+  flaws: string | null;
+  features_and_traits: unknown[] | null;
+  equipment: unknown[] | null;
+  notes: string | null;
+  proficiency_bonus: number;
+  passive_wisdom: number;
 }
 
 const RACES = [
@@ -58,6 +89,14 @@ const BACKGROUNDS = [
   "Urchin",
 ];
 
+// ── Stat modifier helper ───────────────────────────────────────────────────
+function mod(score: number | null): string {
+  const s = score ?? 10;
+  const m = Math.floor((s - 10) / 2);
+  return m >= 0 ? `+${m}` : `${m}`;
+}
+
+// ── Build context string from the manual form ─────────────────────────────
 function buildCharacterContext(c: CharacterFields): string | undefined {
   const parts: string[] = [];
   if (c.name) parts.push(`Name: ${c.name}`);
@@ -77,11 +116,232 @@ function buildCharacterContext(c: CharacterFields): string | undefined {
   return parts.length ? parts.join("\n") : undefined;
 }
 
+// ── Build context string from a premade DB character ─────────────────────
+function buildCharacterContextFromDB(c: PremadeCharacter): string {
+  const parts: string[] = [];
+  parts.push(`Name: ${c.name}`);
+  const identity = [c.race, c.class].filter(Boolean).join(" ");
+  if (identity) parts.push(`${identity} (Level ${c.level ?? 1})`);
+  if (c.background) parts.push(`Background: ${c.background}`);
+  if (c.alignment) parts.push(`Alignment: ${c.alignment}`);
+  const stats = (["str", "dex", "con", "int", "wis", "cha"] as const)
+    .map((s) => (c[s] != null ? `${s.toUpperCase()} ${c[s]}` : null))
+    .filter(Boolean)
+    .join(" | ");
+  if (stats) parts.push(`Ability scores — ${stats}`);
+  const combat = [
+    c.max_hp ? `HP: ${c.max_hp}` : null,
+    c.ac ? `AC: ${c.ac}` : null,
+    c.speed ? `Speed: ${c.speed}ft` : null,
+    c.hit_dice ? `Hit Dice: ${c.hit_dice}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  if (combat) parts.push(combat);
+  parts.push(`Proficiency Bonus: +${c.proficiency_bonus}`);
+  parts.push(`Passive Wisdom: ${c.passive_wisdom}`);
+  if (c.personality_traits) parts.push(`Personality: ${c.personality_traits}`);
+  if (c.ideals) parts.push(`Ideals: ${c.ideals}`);
+  if (c.bonds) parts.push(`Bonds: ${c.bonds}`);
+  if (c.flaws) parts.push(`Flaws: ${c.flaws}`);
+  if (Array.isArray(c.features_and_traits) && c.features_and_traits.length)
+    parts.push(`Features & Traits: ${JSON.stringify(c.features_and_traits)}`);
+  if (Array.isArray(c.equipment) && c.equipment.length)
+    parts.push(`Equipment: ${JSON.stringify(c.equipment)}`);
+  if (c.notes) parts.push(c.notes);
+  return parts.join("\n");
+}
+
+// ── Class accent colours (used for card borders / glows) ─────────────────
+const CLASS_COLOURS: Record<
+  string,
+  { border: string; glow: string; badge: string }
+> = {
+  Barbarian: {
+    border: "border-red-800/60",
+    glow: "rgba(180,30,30,0.15)",
+    badge: "bg-red-900/40 text-red-300",
+  },
+  Bard: {
+    border: "border-purple-800/60",
+    glow: "rgba(140,60,200,0.15)",
+    badge: "bg-purple-900/40 text-purple-300",
+  },
+  Cleric: {
+    border: "border-yellow-700/60",
+    glow: "rgba(200,170,30,0.15)",
+    badge: "bg-yellow-900/40 text-yellow-300",
+  },
+  Druid: {
+    border: "border-green-800/60",
+    glow: "rgba(30,120,60,0.15)",
+    badge: "bg-green-900/40 text-green-300",
+  },
+  Fighter: {
+    border: "border-slate-600/60",
+    glow: "rgba(80,100,130,0.15)",
+    badge: "bg-slate-800/40 text-slate-300",
+  },
+  Monk: {
+    border: "border-teal-700/60",
+    glow: "rgba(30,140,130,0.15)",
+    badge: "bg-teal-900/40 text-teal-300",
+  },
+  Paladin: {
+    border: "border-amber-600/60",
+    glow: "rgba(200,160,30,0.15)",
+    badge: "bg-amber-900/40 text-amber-300",
+  },
+  Ranger: {
+    border: "border-emerald-700/60",
+    glow: "rgba(30,110,70,0.15)",
+    badge: "bg-emerald-900/40 text-emerald-300",
+  },
+  Rogue: {
+    border: "border-zinc-600/60",
+    glow: "rgba(80,80,80,0.2)",
+    badge: "bg-zinc-800/40 text-zinc-300",
+  },
+  Sorcerer: {
+    border: "border-rose-700/60",
+    glow: "rgba(180,40,80,0.15)",
+    badge: "bg-rose-900/40 text-rose-300",
+  },
+  Warlock: {
+    border: "border-violet-700/60",
+    glow: "rgba(100,30,180,0.15)",
+    badge: "bg-violet-900/40 text-violet-300",
+  },
+  Wizard: {
+    border: "border-blue-700/60",
+    glow: "rgba(30,80,180,0.15)",
+    badge: "bg-blue-900/40 text-blue-300",
+  },
+};
+const DEFAULT_COLOUR = {
+  border: "border-amber-950/60",
+  glow: "rgba(120,70,15,0.12)",
+  badge: "bg-amber-900/40 text-amber-300",
+};
+
+function classColour(cls: string | null) {
+  return cls ? (CLASS_COLOURS[cls] ?? DEFAULT_COLOUR) : DEFAULT_COLOUR;
+}
+
+// ── Premade character card ────────────────────────────────────────────────
+function CharacterCard({
+  char,
+  selected,
+  onSelect,
+}: {
+  char: PremadeCharacter;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const colour = classColour(char.class);
+  const scores = ["str", "dex", "con", "int", "wis", "cha"] as const;
+
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full text-left rounded-md border transition-all duration-200 overflow-hidden group
+        ${
+          selected
+            ? `${colour.border} ring-1 ring-amber-700/40 bg-black/50`
+            : "border-amber-950/40 bg-black/20 hover:bg-black/35 hover:border-amber-950/60"
+        }`}
+      style={selected ? { boxShadow: `0 0 20px ${colour.glow}` } : undefined}
+    >
+      {/* Header */}
+      <div className="px-4 pt-3 pb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-serif text-amber-200 text-base leading-tight truncate">
+              {char.name}
+            </span>
+            {selected && (
+              <span className="text-[0.55rem] tracking-widest uppercase text-amber-500/80 border border-amber-700/40 rounded px-1.5 py-0.5">
+                Selected
+              </span>
+            )}
+          </div>
+          <p className="text-amber-900/70 font-serif italic text-xs mt-0.5">
+            {[char.race, char.background].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span
+            className={`text-[0.6rem] tracking-widest uppercase rounded px-2 py-0.5 font-sans ${colour.badge}`}
+          >
+            {char.class ?? "Adventurer"}
+          </span>
+          <span className="text-[0.6rem] text-amber-900/50 font-sans">
+            Level {char.level ?? 1}
+          </span>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="px-4 pb-3">
+        <div className="grid grid-cols-8 gap-1 mt-1">
+          {/* HP & AC */}
+          <div className="col-span-2 flex gap-1">
+            <div className="flex-1 bg-black/30 rounded text-center py-1">
+              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
+                HP
+              </div>
+              <div className="text-amber-300/80 text-sm font-serif">
+                {char.max_hp ?? "—"}
+              </div>
+            </div>
+            <div className="flex-1 bg-black/30 rounded text-center py-1">
+              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
+                AC
+              </div>
+              <div className="text-amber-300/80 text-sm font-serif">
+                {char.ac ?? "—"}
+              </div>
+            </div>
+          </div>
+          {/* Six ability scores */}
+          {scores.map((s) => (
+            <div key={s} className="bg-black/30 rounded text-center py-1">
+              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
+                {s}
+              </div>
+              <div className="text-amber-200/70 text-xs font-serif leading-tight">
+                {char[s] ?? 10}
+              </div>
+              <div className="text-amber-900/60 text-[0.55rem]">
+                {mod(char[s])}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Personality flavour */}
+        {char.personality_traits && (
+          <p className="mt-2 text-amber-950/80 font-serif italic text-[0.7rem] leading-relaxed line-clamp-2">
+            "{char.personality_traits}"
+          </p>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────
 export default function HomePage() {
   const router = useRouter();
   const [screen, setScreen] = useState<Screen>("home");
+  const [charTab, setCharTab] = useState<CharacterTab>("premade");
+  const [premadeChars, setPremadeChars] = useState<PremadeCharacter[]>([]);
+  const [selectedPremade, setSelectedPremade] =
+    useState<PremadeCharacter | null>(null);
+  const [loadingChars, setLoadingChars] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [char, setChar] = useState<CharacterFields>({
     name: "",
     race: "",
@@ -99,6 +359,24 @@ export default function HomePage() {
     notes: "",
   });
 
+  // Fetch premade characters when character screen mounts
+  useEffect(() => {
+    if (screen !== "character") return;
+    setLoadingChars(true);
+    fetch("/api/characters")
+      .then((r) => r.json())
+      .then(({ characters }) => {
+        setPremadeChars(characters ?? []);
+        // Auto-select first character if none selected yet
+        if (!selectedPremade && characters?.length) {
+          setSelectedPremade(characters[0]);
+        }
+      })
+      .catch(() => setPremadeChars([]))
+      .finally(() => setLoadingChars(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
   const set =
     (key: keyof CharacterFields) =>
     (
@@ -109,13 +387,25 @@ export default function HomePage() {
       setChar((prev) => ({ ...prev, [key]: e.target.value }));
 
   const startAdventure = async () => {
+    let characterContext: string | undefined;
+
+    if (charTab === "premade") {
+      if (!selectedPremade) {
+        setError("Please select a character to continue.");
+        return;
+      }
+      characterContext = buildCharacterContextFromDB(selectedPremade);
+    } else {
+      characterContext = buildCharacterContext(char);
+    }
+
     setIsCreating(true);
     setError(null);
     try {
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characterContext: buildCharacterContext(char) }),
+        body: JSON.stringify({ characterContext }),
       });
       if (!res.ok) throw new Error("Failed to create session");
       const { sessionId } = await res.json();
@@ -131,6 +421,7 @@ export default function HomePage() {
   const labelCls =
     "font-sans text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/70";
 
+  // ── Home screen ───────────────────────────────────────────────────────
   if (screen === "home")
     return (
       <main
@@ -186,6 +477,7 @@ export default function HomePage() {
       </main>
     );
 
+  // ── Character screen ──────────────────────────────────────────────────
   return (
     <main
       className="min-h-screen bg-stone-950 flex flex-col items-center justify-start px-4 py-10"
@@ -194,148 +486,204 @@ export default function HomePage() {
           "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(120,70,15,0.12) 0%, #0d0a07 70%)",
       }}
     >
-      <div className="max-w-md w-full space-y-4">
-        <div className="text-center mb-6">
+      <div className="max-w-lg w-full space-y-4">
+        {/* Page title */}
+        <div className="text-center mb-2">
           <h2 className="font-serif text-xl text-amber-300 tracking-widest">
-            Character Sheet
+            Choose Your Hero
           </h2>
           <p className="text-amber-900/70 font-serif italic text-sm mt-1">
-            All fields optional — leave blank for a pre-made adventurer
+            Select a ready-made adventurer or craft your own
           </p>
         </div>
 
-        {/* Identity */}
-        <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
-          <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-            Identity
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className={labelCls}>Name</label>
-              <input
-                className={inputCls}
-                value={char.name}
-                onChange={set("name")}
-                placeholder="Thalindra"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className={labelCls}>Race</label>
-              <select
-                className={inputCls}
-                value={char.race}
-                onChange={set("race")}
-              >
-                <option value="">— Choose —</option>
-                {RACES.map((r) => (
-                  <option key={r}>{r}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className={labelCls}>Class</label>
-              <select
-                className={inputCls}
-                value={char.charClass}
-                onChange={set("charClass")}
-              >
-                <option value="">— Choose —</option>
-                {CLASSES.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className={labelCls}>Background</label>
-              <select
-                className={inputCls}
-                value={char.background}
-                onChange={set("background")}
-              >
-                <option value="">— Choose —</option>
-                {BACKGROUNDS.map((b) => (
-                  <option key={b}>{b}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+        {/* Tab toggle */}
+        <div className="flex rounded-md overflow-hidden border border-amber-950/50">
+          <button
+            onClick={() => setCharTab("premade")}
+            className={`flex-1 py-2.5 text-sm font-serif tracking-widest transition-colors ${
+              charTab === "premade"
+                ? "bg-amber-900/60 text-amber-200 border-r border-amber-950/50"
+                : "bg-black/20 text-amber-900/60 hover:text-amber-800/80 border-r border-amber-950/50"
+            }`}
+          >
+            ⚔ Choose a Hero
+          </button>
+          <button
+            onClick={() => setCharTab("custom")}
+            className={`flex-1 py-2.5 text-sm font-serif tracking-widest transition-colors ${
+              charTab === "custom"
+                ? "bg-amber-900/60 text-amber-200"
+                : "bg-black/20 text-amber-900/60 hover:text-amber-800/80"
+            }`}
+          >
+            ✦ Build Your Own
+          </button>
         </div>
 
-        {/* Stats */}
-        <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
-          <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-            Ability Scores
-          </p>
-          <div className="grid grid-cols-6 gap-2">
-            {(["str", "dex", "con", "int", "wis", "cha"] as const).map((s) => (
-              <div key={s} className="flex flex-col items-center gap-1">
-                <label className={labelCls}>{s.toUpperCase()}</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  className={inputCls + " text-center px-1"}
-                  value={char[s]}
-                  onChange={set(s)}
-                  placeholder="10"
-                />
+        {/* ── Premade tab ── */}
+        {charTab === "premade" && (
+          <div className="space-y-3">
+            {loadingChars ? (
+              <div className="text-center py-10 text-amber-900/50 font-serif italic">
+                Summoning heroes from the Forgotten Realms…
               </div>
-            ))}
+            ) : premadeChars.length === 0 ? (
+              <div className="text-center py-10 text-amber-900/50 font-serif italic">
+                No heroes found. Try building your own.
+              </div>
+            ) : (
+              premadeChars.map((c) => (
+                <CharacterCard
+                  key={c.id}
+                  char={c}
+                  selected={selectedPremade?.id === c.id}
+                  onSelect={() => setSelectedPremade(c)}
+                />
+              ))
+            )}
           </div>
-          <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2 mt-1">
-            Combat
-          </p>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <label className={labelCls}>Max HP</label>
-              <input
-                type="number"
-                className={inputCls}
-                value={char.hp}
-                onChange={set("hp")}
-                placeholder="10"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className={labelCls}>AC</label>
-              <input
-                type="number"
-                className={inputCls}
-                value={char.ac}
-                onChange={set("ac")}
-                placeholder="12"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className={labelCls}>Level</label>
-              <select
-                className={inputCls}
-                value={char.level}
-                onChange={set("level")}
-              >
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n}>{n}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
+        )}
 
-        {/* Notes */}
-        <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-2">
-          <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-            Notes
-          </p>
-          <label className={labelCls}>
-            Equipment, spells, traits, backstory…
-          </label>
-          <textarea
-            className={inputCls + " min-h-[70px] resize-y"}
-            value={char.notes}
-            onChange={set("notes")}
-            placeholder="Carries a family heirloom dagger. Speaks Elvish. Seeking a missing sister last seen near Phandalin..."
-          />
-        </div>
+        {/* ── Custom tab — original form, untouched ── */}
+        {charTab === "custom" && (
+          <div className="space-y-4">
+            {/* Identity */}
+            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
+              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
+                Identity
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className={labelCls}>Name</label>
+                  <input
+                    className={inputCls}
+                    value={char.name}
+                    onChange={set("name")}
+                    placeholder="Thalindra"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>Race</label>
+                  <select
+                    className={inputCls}
+                    value={char.race}
+                    onChange={set("race")}
+                  >
+                    <option value="">— Choose —</option>
+                    {RACES.map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>Class</label>
+                  <select
+                    className={inputCls}
+                    value={char.charClass}
+                    onChange={set("charClass")}
+                  >
+                    <option value="">— Choose —</option>
+                    {CLASSES.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>Background</label>
+                  <select
+                    className={inputCls}
+                    value={char.background}
+                    onChange={set("background")}
+                  >
+                    <option value="">— Choose —</option>
+                    {BACKGROUNDS.map((b) => (
+                      <option key={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats */}
+            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
+              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
+                Ability Scores
+              </p>
+              <div className="grid grid-cols-6 gap-2">
+                {(["str", "dex", "con", "int", "wis", "cha"] as const).map(
+                  (s) => (
+                    <div key={s} className="flex flex-col items-center gap-1">
+                      <label className={labelCls}>{s.toUpperCase()}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        className={inputCls + " text-center px-1"}
+                        value={char[s]}
+                        onChange={set(s)}
+                        placeholder="10"
+                      />
+                    </div>
+                  ),
+                )}
+              </div>
+              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2 mt-1">
+                Combat
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className={labelCls}>Max HP</label>
+                  <input
+                    type="number"
+                    className={inputCls}
+                    value={char.hp}
+                    onChange={set("hp")}
+                    placeholder="10"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>AC</label>
+                  <input
+                    type="number"
+                    className={inputCls}
+                    value={char.ac}
+                    onChange={set("ac")}
+                    placeholder="12"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className={labelCls}>Level</label>
+                  <select
+                    className={inputCls}
+                    value={char.level}
+                    onChange={set("level")}
+                  >
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n}>{n}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-2">
+              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
+                Notes
+              </p>
+              <label className={labelCls}>
+                Equipment, spells, traits, backstory…
+              </label>
+              <textarea
+                className={inputCls + " min-h-[70px] resize-y"}
+                value={char.notes}
+                onChange={set("notes")}
+                placeholder="Carries a family heirloom dagger. Speaks Elvish. Seeking a missing sister last seen near Phandalin..."
+              />
+            </div>
+          </div>
+        )}
 
         {error && (
           <p className="text-red-400/80 text-sm font-serif italic text-center">
@@ -345,7 +693,10 @@ export default function HomePage() {
 
         <button
           onClick={startAdventure}
-          disabled={isCreating}
+          disabled={
+            isCreating ||
+            (charTab === "premade" && !selectedPremade && !loadingChars)
+          }
           className="w-full py-4 bg-gradient-to-br from-amber-900 to-amber-800 hover:from-amber-800 hover:to-amber-700 disabled:opacity-50 border border-amber-700/60 text-amber-100 font-serif text-lg rounded tracking-widest transition-all shadow-lg shadow-amber-950/50"
         >
           {isCreating
@@ -358,9 +709,13 @@ export default function HomePage() {
         >
           ← Back
         </button>
-        <p className="text-center text-amber-950/60 font-serif italic text-sm">
-          All fields optional — the DM will generate a character if left blank.
-        </p>
+
+        {charTab === "custom" && (
+          <p className="text-center text-amber-950/60 font-serif italic text-sm">
+            All fields optional — the DM will generate a character if left
+            blank.
+          </p>
+        )}
       </div>
     </main>
   );
