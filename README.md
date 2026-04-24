@@ -171,46 +171,63 @@ updated_at
 
 ```
 app/
-  api/
-    chat/route.ts                     # RAG pipeline + combat state updates
-    sessions/route.ts                 # Session CRUD + opening narration generation
-    sessions/[id]/route.ts            # Fetch a single session (character context etc.)
-    sessions/[id]/messages/route.ts   # Fetch messages for a session
-    combat/[id]/route.ts              # GET combat state; PATCH to submit player initiative
-    journal/route.ts                  # Journal generation
-    journal/[id]/route.ts             # Fetch a single journal entry
-  session/[id]/page.tsx               # Active play session (chat + sidebar UI)
-  journal/page.tsx                    # Journal list
-  journal/[id]/page.tsx               # Single journal entry
-  page.tsx                            # Home + character creation flow
-lib/
-  supabase.ts                         # Supabase client (browser + admin)
-  rag.ts                              # embedText() + retrieveChunks()
-  dm-prompt.ts                        # DM system prompt builder — injects combat state,
-                                      # character context, strict turn instructions,
-                                      # and structured [STATUS]/[HINTS] output format
-  parse-dm-response.ts                # parseDMResponse() / parseDMResponsePartial() —
-                                      # splits raw DM output into narrative, statusItems,
-                                      # and hints; structured parser with freeform fallback
-  combat/
-    types.ts                          # Combatant, CombatState, CombatLogEntry types
-    dice.ts                           # roll(), rollAttack(), rollDamage(), rollInitiative()
-    engine.ts                         # Pure state machine: advanceTurn, applyDamage, etc.
-    detector.ts                       # detectCombatStart(), parseDamageFromNarrative()
-    encounters.ts                     # LMoP monster stat blocks, encounter definitions,
-                                      # detectEncounterKey(), buildEncounterMonstersOnly()
-    repository.ts                     # getCombatState(), upsertCombatState()
-components/
-  ChatMessage.tsx                     # DMMessage + UserMessage — parses raw DM content
-                                      # at render time; uses hook's parsedDM for live stream
-  StatusCard.tsx                      # Renders [STATUS] items as a quest status card
-  HintPanel.tsx                       # Renders [HINTS] as a collapsible "What can I do?" panel
-hooks/
-  useChat.ts                          # Chat state, streaming, initiative flag,
+ ├── api/
+ │   ├── chat/route.ts                # RAG pipeline + combat state updates
+ │   ├── sessions/route.ts            # Session CRUD + opening narration generation
+ │   ├── sessions/[id]/route.ts       # Fetch a single session (character context etc.)
+ │   ├── sessions/[id]/messages/route.ts # Fetch messages for a session
+ │   ├── combat/[id]/route.ts         # GET combat state; PATCH to submit player initiative
+ │   ├── journal/route.ts             # Journal generation
+ │   └── journal/[id]/route.ts        # Fetch a single journal entry
+ ├── journal/
+ │   ├── [id]/                        # Single journal entry view
+ │   │   ├── components/              # Route-specific UI
+ │   │   │   ├── SessionCard.tsx
+ │   │   │   └── StatusBadge.tsx
+ │   │   └── page.tsx
+ │   └── page.tsx                     # Journal list view
+ ├── session/
+ │   └── [id]/                        # Active play session
+ │       ├── components/              # Combat & Sidebar UI logic
+ │       │   ├── CombatantRow.tsx
+ │       │   ├── DiceRoller.tsx
+ │       │   ├── InitiativeRoller.tsx
+ │       │   ├── SidebarSection.tsx
+ │       │   └── StatBlock.tsx
+ │       └── page.tsx
+ ├── components/                      # Shared/Global UI components
+ │   ├── CharacterCard.tsx
+ │   ├── ChatMessage.tsx              # DMMessage + UserMessage — parses raw DM content
+ |   |                                # at render time; uses hook's parsedDM for live stream
+ │   ├── HintPanel.tsx                # Renders [HINTS] as a collapsible "What can I do?" panel
+ │   └── StatusCard.tsx               # Renders [STATUS] items as a quest status card
+ ├── layout.tsx
+ ├── page.tsx                         # Landing / Character Creation
+ └── page.types.ts                    # Shared types for the entry flow
+ lib/
+ ├── combat/                          # Modularized Combat Engine
+ │   ├── detector.ts                  # detectCombatStart(), parseDamageFromNarrative()
+ │   ├── dice.ts                      # roll(), rollAttack(), rollDamage(), rollInitiative()
+ │   ├── encounters.ts                # LMoP monster stat blocks, encounter definitions,
+ |   |                                # detectEncounterKey(), buildEncounterMonstersOnly()
+ │   ├── engine.ts                    # Pure state machine: advanceTurn, applyDamage, etc.
+ │   ├── repository.ts                # getCombatState(), upsertCombatState()
+ │   └── types.ts                     # Combatant, CombatState, CombatLogEntry types
+ ├── character.ts                     # Character sheet utilities
+ ├── dm-prompt.ts                     # DM system prompt builder — injects combat state,
+ |                                    # character context, strict turn instructions,
+ |                                    # and structured [STATUS]/[HINTS] output format
+ ├── parse-dm-response.ts             # parseDMResponse() / parseDMResponsePartial() —
+ |                                    # splits raw DM output into narrative, statusItems,
+ |                                    # and hints; structured parser with freeform fallback
+ ├── rag.ts                           # embedText() + retrieveChunks()
+ └── supabase.ts                      # Supabase client (browser + admin)
+ hooks/
+ └── useChat.ts                       # Chat state, streaming, initiative flag
                                       # pendingRolls parsed from DM [ROLL:] tags,
                                       # parsedDM updated live as stream arrives
 scripts/
-  ingest.ts                           # One-time document ingestion pipeline
+ └── ingest.ts                        # One-time document ingestion pipeline
 ```
 
 ---

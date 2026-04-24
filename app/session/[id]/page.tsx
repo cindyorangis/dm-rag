@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { CharacterData, CombatState } from "./page.types";
+import {
+  parseCharacterContext,
+  modifier,
+  CharacterData,
+  CombatState,
+} from "@/lib/character";
 import { useChat } from "@/hooks/useChat";
 import DiceRoller from "../components/DiceRoller";
 import InitiativeRoller from "../components/InitiativeRoller";
@@ -11,67 +16,6 @@ import SidebarSection from "../components/SidebarSection";
 import CombatantRow from "../components/CombatantRow";
 import { DMMessage, UserMessage } from "@/components/ChatMessage";
 import type { RollRequest } from "@/hooks/useChat";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function parseCharacterContext(ctx: string): CharacterData {
-  if (!ctx) return {};
-  const lines = ctx
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const data: CharacterData = {};
-  for (const line of lines) {
-    if (line.startsWith("Name:")) {
-      data.name = line.replace("Name:", "").trim();
-      continue;
-    }
-    if (line.startsWith("Background:")) {
-      data.background = line.replace("Background:", "").trim();
-      continue;
-    }
-    if (line.startsWith("Ability scores")) {
-      for (const pair of line
-        .replace("Ability scores —", "")
-        .trim()
-        .split("|")) {
-        const [stat, val] = pair.trim().split(" ");
-        const key = stat?.toLowerCase() as keyof CharacterData;
-        if (key && val) (data as Record<string, string>)[key] = val;
-      }
-      continue;
-    }
-    const hpMatch = line.match(/HP:\s*(\d+)/);
-    if (hpMatch) data.hp = hpMatch[1];
-    const acMatch = line.match(/AC:\s*(\d+)/);
-    if (acMatch) data.ac = acMatch[1];
-    if (line.match(/Level \d+/)) {
-      data.identity = line;
-      continue;
-    }
-    if (
-      !line.startsWith("HP:") &&
-      !line.startsWith("AC:") &&
-      !line.startsWith("Name:") &&
-      !line.startsWith("Background:") &&
-      !line.startsWith("Ability")
-    ) {
-      if (!data.notes) data.notes = line;
-      else data.notes += " " + line;
-    }
-  }
-  return data;
-}
-
-function modifier(score: string | undefined): string {
-  if (!score) return "—";
-  const n = parseInt(score);
-  if (isNaN(n)) return "—";
-  const mod = Math.floor((n - 10) / 2);
-  return mod >= 0 ? `+${mod}` : `${mod}`;
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();

@@ -1,4 +1,4 @@
-import { Combatant } from "../[id]/page.types";
+import { Combatant } from "@/lib/character";
 
 function hpPercent(hp: number, max: number) {
   return Math.max(0, Math.min(100, (hp / max) * 100));
