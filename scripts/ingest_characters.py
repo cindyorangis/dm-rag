@@ -42,51 +42,54 @@ def pdf_to_image_bytes(pdf_path):
 
 def extract_character_data(image_bytes):
     prompt = """
-    You are an expert at parsing D&D 5e character sheets.
-    Your task: Extract every field into a strict JSON object.
-    
-    INSTRUCTIONS:
-    1. If a value is unreadable, output null. DO NOT GUESS defaults (like 10 or 0).
-    2. Look at the top for name, race, and background.
-    3. Look at the central bubbles for stats (str, dex, con, int, wis, cha).
-    4. Look for the 'Personality', 'Ideals', 'Bonds', 'Flaws' boxes on the left.
-    5. Ensure JSON output is standard.
-    
-    CRITICAL: 
-    - Do NOT perform any math. If the box says '1d10', return '1d10'. 
-    - If a field is empty, return null. 
-    - If reading a number, check the small digit in the corner of the bubble, not the big stat.
-    - For Personality, Ideals, Bonds, and Flaws, extract the exact text found in those boxes.
+    SYSTEM: You are a strict JSON data extraction engine. You do not converse, greet, or summarize. 
+    TASK: Analyze the attached D&D 5e character sheet image and extract the data into a valid JSON object.
 
-    SYSTEM: You are a JSON parsing machine. Do NOT act as a chatbot. Do NOT greet. Do NOT summarize.
-    TASK: Extract character data into JSON.
-    OUTPUT RULES:
-    1. Output ONLY a valid JSON object.
-    2. No markdown formatting (no ```json ... ``` tags).
-    3. No preamble. No concluding text.
-    4. If a value is unknown, use null.
-    5. 'hit_dice': Only extract the class-specific Hit Die (e.g., "1d8", "1d6"). Do NOT include damage values, attack bonuses, or flavor text.
-    6. 'notes': If you find "Faction" information or extra story text, put it here. Do NOT include it in personality_traits or background.
-    7. 'race': Extract ONLY the race name (e.g., "Human", "Hill Dwarf"). 
-       - DO NOT include size (e.g., "Medium humanoid").
-       - DO NOT include alignment in this field.
-    8. 'background': Look specifically for the "Background" box. 
-       - DO NOT use the "Faction" name as the background.
-    9. 'alignment': Extract only the two-word alignment (e.g., "Chaotic Good").
-    10. If the data looks like a sentence (e.g., "A human fighter from..."), discard it and return only the keyword.
-    11. If a field is not found, return null.
+    CORE RULES:
+    1. Output ONLY raw, valid JSON. No markdown formatting (e.g., no ```json tags), no preamble, and no concluding text.
+    2. If a value is missing, empty, or unreadable, output null. Do not guess or perform math.
 
-    Output strictly in this JSON format:
+    FIELD-SPECIFIC RULES:
+    - Base Stats (str, dex, con, int, wis, cha): Extract the small base score digit, not the large modifier.
+    - hit_dice: Extract exactly the class hit die notation (e.g., "1d8"). Ignore added damage or modifiers.
+    - race: Extract ONLY the specific race keyword (e.g., "Human", "Hill Dwarf"). Discard size descriptors.
+    - background: Extract the core background keyword. If it is a Faction name, put it in 'notes' instead.
+    - alignment: Extract the two-word alignment (e.g., "Chaotic Good", "Neutral Evil").
+    - personality_traits, ideals, bonds, flaws: Extract the exact text from these boxes.
+    - notes: Use this field to store Faction info or extra story text that doesn't fit standard fields.
+
+    EXPECTED BEHAVIOR EXAMPLE (For Header Data):
+    If the sheet header says "Medium humanoid (hill dwarf), chaotic good" and "Faction: Lords' Alliance":
     {
-        "name": "string", "race": "string", "class": "string", "level": int, 
-        "background": "string", "alignment": "string",
+        "race": "Hill Dwarf",
+        "class": "Cleric",
+        "background": "Soldier",
+        "alignment": "Chaotic Good",
+        "notes": "Faction: Lords' Alliance"
+    }
+
+    OUTPUT STRICTLY IN THIS JSON SCHEMA:
+    {
+        "name": "string", 
+        "race": "string", 
+        "class": "string", 
+        "level": int, 
+        "background": "string", 
+        "alignment": "string",
         "str": int, "dex": int, "con": int, "int": int, "wis": int, "cha": int,
         "ac": int, "max_hp": int, "speed": int, "hit_dice": "string",
         "personality_traits": "string", "ideals": "string", "bonds": "string", "flaws": "string",
-        "proficiencies": {"saving_throws": [], "skills": [], "tools": [], "languages": [], "passive_perception": int},
+        "proficiencies": {
+            "saving_throws": ["string"], 
+            "skills": ["string"], 
+            "tools": ["string"], 
+            "languages": ["string"], 
+            "passive_perception": int
+        },
         "features_and_traits": [{"name": "string", "description": "string"}],
         "actions": [{"name": "string", "type": "string", "hit_bonus": "string", "damage": "string"}],
-        "equipment": ["string"]
+        "equipment": ["string"],
+        "notes": "string"
     }
     """
 
