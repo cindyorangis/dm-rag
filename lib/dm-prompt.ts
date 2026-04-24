@@ -111,19 +111,54 @@ function buildCombatInstructions(state: CombatState): string {
 --- COMBAT INSTRUCTIONS: PLAYER'S TURN ---
 It is ${current.name}'s turn (the PLAYER).
 
-PLAYER TURN RULES:
-- Wait for the player to declare their action before resolving anything.
-- If the player declares an ATTACK: respond with exactly this format on its own line:
-  [ROLL: attack d20+<bonus> vs AC <target_ac> target:<target_name>]
-  Then wait — do not resolve the attack yourself.
-- If the player casts a SPELL that requires an attack roll or saving throw, use the same [ROLL:] format.
-- If the player does something requiring an ABILITY CHECK: use this format:
-  [ROLL: check d20+<ability_mod> DC<difficulty> <skill_name>]
-- If the player takes damage and needs a SAVING THROW:
+PLAYER TURN RULES — follow this exact sequence every turn:
+
+━━ STEP 1: PLAYER DECLARES ACTION ━━
+Wait for the player to describe what they do.
+- Do NOT prompt them with "What do you do?" — they know it's their turn.
+- Do NOT resolve anything until they speak.
+
+━━ STEP 2: ATTACK ROLL ━━
+If the player declares an attack (melee, ranged, or spell attack):
+  → Output exactly this on its own line, then STOP. Do not write anything else.
+  [ROLL: attack d20+<attack_bonus> vs AC <target_ac> target:<target_name>]
+
+If the player does something requiring an ABILITY CHECK:
+  [ROLL: check d20+<ability_mod> DC<dc> <skill_name>]
+
+If the player needs a SAVING THROW:
   [ROLL: save d20+<save_mod> DC<dc> <ability_name>]
-- Do NOT roll dice for the player. Do NOT resolve attacks without a roll result.
-- Do NOT advance to the next turn until the player has acted and dice have been resolved.
-- After the player acts and dice are resolved, narrate the outcome, then say who is next.`;
+
+ONE [ROLL:] tag per response — never combine two roll tags in the same message.
+
+━━ STEP 3: RESOLVE THE ATTACK ROLL ━━
+The player sends back a message like: "Attack roll: 14 + 4 = 18 vs AC 15 — HIT!" or "— MISS."
+
+On a MISS:
+  - Write one sentence of miss flavour (blade deflected, arrow goes wide, etc.)
+  - Do NOT emit a damage [ROLL:] tag
+  - Proceed to the next turn
+
+On a HIT:
+  - Write exactly one sentence of hit flavour ("Your blade bites into the goblin's side.")
+  - Then on the very next line, output the damage roll tag and STOP:
+  [ROLL: damage <damage_dice> target:<target_name>]
+  Use the correct damage dice for the player's weapon or spell from their character sheet.
+  On a CRITICAL HIT (natural 20): double the damage dice (e.g. 2d6+3 instead of 1d6+3).
+
+━━ STEP 4: RESOLVE THE DAMAGE ROLL ━━
+The player sends back a message like: "Damage roll (1d6+3): rolled 7 (4+3)"
+
+  - Narrate the damage vividly: describe the wound, the enemy staggering, flying back, etc.
+  - Apply the damage to the target.
+  - If the target reaches 0 HP, narrate its defeat dramatically.
+  - State who acts next, then stop.
+
+━━ IRON RULES ━━
+- NEVER roll dice for the player.
+- NEVER skip the attack roll step and go straight to damage.
+- NEVER emit both [ROLL: attack ...] and [ROLL: damage ...] in the same response.
+- NEVER advance the turn until BOTH the attack roll AND (on a hit) the damage roll have been received.`;
   } else {
     // Monster / NPC turn
     const alivePlayers = state.combatants.filter(
