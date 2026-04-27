@@ -1,10 +1,6 @@
-import { PremadeCharacter } from "@/app/page.types";
+﻿import { PremadeCharacter } from "@/app/page.types";
 
-// ── Class accent colours (used for card borders / glows) ─────────────────
-const CLASS_COLOURS: Record<
-  string,
-  { border: string; glow: string; badge: string }
-> = {
+const CLASS_COLOURS: Record<string, { border: string; glow: string; badge: string }> = {
   Barbarian: {
     border: "border-red-800/60",
     glow: "rgba(180,30,30,0.15)",
@@ -66,8 +62,9 @@ const CLASS_COLOURS: Record<
     badge: "bg-blue-900/40 text-blue-300",
   },
 };
+
 const DEFAULT_COLOUR = {
-  border: "border-amber-950/60",
+  border: "border-amber-900/45",
   glow: "rgba(120,70,15,0.12)",
   badge: "bg-amber-900/40 text-amber-300",
 };
@@ -76,7 +73,6 @@ function classColour(cls: string | null) {
   return cls ? (CLASS_COLOURS[cls] ?? DEFAULT_COLOUR) : DEFAULT_COLOUR;
 }
 
-// ── Stat modifier helper ───────────────────────────────────────────────────
 function mod(score: number | null): string {
   const s = score ?? 10;
   const m = Math.floor((s - 10) / 2);
@@ -98,85 +94,76 @@ export default function CharacterCard({
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left rounded-md border transition-all duration-200 overflow-hidden group
+      className={`w-full overflow-hidden rounded-lg border text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70
         ${
           selected
-            ? `${colour.border} ring-1 ring-amber-700/40 bg-black/50`
-            : "border-amber-950/40 bg-black/20 hover:bg-black/35 hover:border-amber-950/60"
+            ? `${colour.border} ring-1 ring-amber-500/50 bg-black/55`
+            : "border-amber-900/35 bg-black/25 hover:border-amber-700/50 hover:bg-black/40"
         }`}
       style={selected ? { boxShadow: `0 0 20px ${colour.glow}` } : undefined}
     >
-      {/* Header */}
-      <div className="px-4 pt-3 pb-2 flex items-start justify-between gap-2">
+      <div className="flex items-start justify-between gap-2 px-4 pb-2.5 pt-3.5">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-serif text-amber-200 text-base leading-tight truncate">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate font-serif text-lg leading-tight text-amber-100">
               {char.name}
             </span>
             {selected && (
-              <span className="text-[0.55rem] tracking-widest uppercase text-amber-500/80 border border-amber-700/40 rounded px-1.5 py-0.5">
+              <span className="rounded border border-amber-600/50 px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.14em] text-amber-300">
                 Selected
               </span>
             )}
           </div>
-          <p className="text-amber-900/70 font-serif italic text-xs mt-0.5">
+          <p className="mt-0.5 font-serif text-sm text-amber-200/80 italic">
             {[char.race, char.background].filter(Boolean).join(" · ")}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-1 shrink-0">
+
+        <div className="flex shrink-0 flex-col items-end gap-1">
           <span
-            className={`text-[0.6rem] tracking-widest uppercase rounded px-2 py-0.5 font-sans ${colour.badge}`}
+            className={`rounded px-2 py-0.5 font-sans text-[0.65rem] uppercase tracking-[0.14em] ${colour.badge}`}
           >
             {char.class ?? "Adventurer"}
           </span>
-          <span className="text-[0.6rem] text-amber-900/50 font-sans">
+          <span className="font-sans text-[0.68rem] text-amber-300/70">
             Level {char.level ?? 1}
           </span>
         </div>
       </div>
 
-      {/* Stats row */}
-      <div className="px-4 pb-3">
-        <div className="grid grid-cols-8 gap-1 mt-1">
-          {/* HP & AC */}
-          <div className="col-span-2 flex gap-1">
-            <div className="flex-1 bg-black/30 rounded text-center py-1">
-              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
+      <div className="px-4 pb-3.5">
+        <div className="mt-1 grid grid-cols-8 gap-1.5">
+          <div className="col-span-2 flex gap-1.5">
+            <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
+              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
                 HP
               </div>
-              <div className="text-amber-300/80 text-sm font-serif">
-                {char.max_hp ?? "—"}
-              </div>
+              <div className="font-serif text-sm text-amber-100">{char.max_hp ?? "-"}</div>
             </div>
-            <div className="flex-1 bg-black/30 rounded text-center py-1">
-              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
+            <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
+              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
                 AC
               </div>
-              <div className="text-amber-300/80 text-sm font-serif">
-                {char.ac ?? "—"}
-              </div>
+              <div className="font-serif text-sm text-amber-100">{char.ac ?? "-"}</div>
             </div>
           </div>
-          {/* Six ability scores */}
-          {scores.map((s) => (
-            <div key={s} className="bg-black/30 rounded text-center py-1">
-              <div className="text-[0.5rem] uppercase tracking-widest text-amber-900/60">
-                {s}
+
+          {scores.map((ability) => (
+            <div key={ability} className="rounded bg-black/35 py-1.5 text-center">
+              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
+                {ability}
               </div>
-              <div className="text-amber-200/70 text-xs font-serif leading-tight">
-                {char[s] ?? 10}
+              <div className="font-serif text-xs leading-tight text-amber-100">
+                {char[ability] ?? 10}
               </div>
-              <div className="text-amber-900/60 text-[0.55rem]">
-                {mod(char[s])}
-              </div>
+              <div className="text-[0.6rem] text-amber-300/80">{mod(char[ability])}</div>
             </div>
           ))}
         </div>
 
-        {/* Personality flavour */}
         {char.personality_traits && (
-          <p className="mt-2 text-amber-950/80 font-serif italic text-[0.7rem] leading-relaxed line-clamp-2">
-            "{char.personality_traits}"
+          <p className="mt-2.5 line-clamp-2 font-serif text-xs leading-relaxed text-amber-200/80 italic">
+            {`"${char.personality_traits}"`}
           </p>
         )}
       </div>
