@@ -1,20 +1,3 @@
-export interface CharacterFields {
-  name: string;
-  race: string;
-  charClass: string;
-  background: string;
-  level: string;
-  hp: string;
-  ac: string;
-  str: string;
-  dex: string;
-  con: string;
-  int: string;
-  wis: string;
-  cha: string;
-  notes: string;
-}
-
 // Matches the characters table schema
 export interface PremadeCharacter {
   id: string;

@@ -3,10 +3,9 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import CharacterCard from "@/components/CharacterCard";
-import { CharacterFields, PremadeCharacter } from "./page.types";
+import { PremadeCharacter } from "./page.types";
 
 type Screen = "home" | "character";
-type CharacterTab = "premade" | "custom";
 
 const RACES = [
   "Human",
@@ -43,26 +42,6 @@ const BACKGROUNDS = [
   "Soldier",
   "Urchin",
 ];
-
-// ── Build context string from the manual form ─────────────────────────────
-function buildCharacterContext(c: CharacterFields): string | undefined {
-  const parts: string[] = [];
-  if (c.name) parts.push(`Name: ${c.name}`);
-  const identity = [c.race, c.charClass].filter(Boolean).join(" ");
-  if (identity) parts.push(`${identity} (Level ${c.level || 1})`);
-  if (c.background) parts.push(`Background: ${c.background}`);
-  const stats = (["str", "dex", "con", "int", "wis", "cha"] as const)
-    .map((s) => (c[s] ? `${s.toUpperCase()} ${c[s]}` : null))
-    .filter(Boolean)
-    .join(" | ");
-  if (stats) parts.push(`Ability scores — ${stats}`);
-  const combat = [c.hp ? `HP: ${c.hp}` : null, c.ac ? `AC: ${c.ac}` : null]
-    .filter(Boolean)
-    .join(", ");
-  if (combat) parts.push(combat);
-  if (c.notes) parts.push(c.notes);
-  return parts.length ? parts.join("\n") : undefined;
-}
 
 // ── Build context string from a premade DB character ─────────────────────
 function buildCharacterContextFromDB(c: PremadeCharacter): string {
@@ -104,30 +83,12 @@ function buildCharacterContextFromDB(c: PremadeCharacter): string {
 export default function HomePage() {
   const router = useRouter();
   const [screen, setScreen] = useState<Screen>("home");
-  const [charTab, setCharTab] = useState<CharacterTab>("premade");
   const [premadeChars, setPremadeChars] = useState<PremadeCharacter[]>([]);
   const [selectedPremade, setSelectedPremade] =
     useState<PremadeCharacter | null>(null);
   const [loadingChars, setLoadingChars] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [char, setChar] = useState<CharacterFields>({
-    name: "",
-    race: "",
-    charClass: "",
-    background: "",
-    level: "1",
-    hp: "",
-    ac: "",
-    str: "",
-    dex: "",
-    con: "",
-    int: "",
-    wis: "",
-    cha: "",
-    notes: "",
-  });
 
   // Fetch premade characters when character screen mounts
   useEffect(() => {
@@ -147,26 +108,10 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
-  const set =
-    (key: keyof CharacterFields) =>
-    (
-      e: React.ChangeEvent<
-        HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
-      >,
-    ) =>
-      setChar((prev) => ({ ...prev, [key]: e.target.value }));
-
   const startAdventure = async () => {
-    let characterContext: string | undefined;
-
-    if (charTab === "premade") {
-      if (!selectedPremade) {
-        setError("Please select a character to continue.");
-        return;
-      }
-      characterContext = buildCharacterContextFromDB(selectedPremade);
-    } else {
-      characterContext = buildCharacterContext(char);
+    if (!selectedPremade) {
+      setError("Please select a character to continue.");
+      return;
     }
 
     setIsCreating(true);
@@ -175,7 +120,9 @@ export default function HomePage() {
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characterContext }),
+        body: JSON.stringify({
+          characterContext: buildCharacterContextFromDB(selectedPremade),
+        }),
       });
       if (!res.ok) throw new Error("Failed to create session");
       const { sessionId } = await res.json();
@@ -257,201 +204,33 @@ export default function HomePage() {
       }}
     >
       <div className="max-w-lg w-full space-y-4">
-        {/* Page title */}
         <div className="text-center mb-2">
           <h2 className="font-serif text-xl text-amber-300 tracking-widest">
             Choose Your Hero
           </h2>
           <p className="text-amber-900/70 font-serif italic text-sm mt-1">
-            Select a ready-made adventurer or craft your own
+            Select your adventurer
           </p>
         </div>
 
-        {/* Tab toggle */}
-        <div className="flex rounded-md overflow-hidden border border-amber-950/50">
-          <button
-            onClick={() => setCharTab("premade")}
-            className={`flex-1 py-2.5 text-sm font-serif tracking-widest transition-colors ${
-              charTab === "premade"
-                ? "bg-amber-900/60 text-amber-200 border-r border-amber-950/50"
-                : "bg-black/20 text-amber-900/60 hover:text-amber-800/80 border-r border-amber-950/50"
-            }`}
-          >
-            ⚔ Choose a Hero
-          </button>
-          <button
-            onClick={() => setCharTab("custom")}
-            className={`flex-1 py-2.5 text-sm font-serif tracking-widest transition-colors ${
-              charTab === "custom"
-                ? "bg-amber-900/60 text-amber-200"
-                : "bg-black/20 text-amber-900/60 hover:text-amber-800/80"
-            }`}
-          >
-            ✦ Build Your Own
-          </button>
-        </div>
-
-        {/* ── Premade tab ── */}
-        {charTab === "premade" && (
-          <div className="space-y-3">
-            {loadingChars ? (
-              <div className="text-center py-10 text-amber-900/50 font-serif italic">
-                Summoning heroes from the Forgotten Realms…
-              </div>
-            ) : premadeChars.length === 0 ? (
-              <div className="text-center py-10 text-amber-900/50 font-serif italic">
-                No heroes found. Try building your own.
-              </div>
-            ) : (
-              premadeChars.map((c) => (
-                <CharacterCard
-                  key={c.id}
-                  char={c}
-                  selected={selectedPremade?.id === c.id}
-                  onSelect={() => setSelectedPremade(c)}
-                />
-              ))
-            )}
+        {loadingChars ? (
+          <div className="text-center py-10 text-amber-900/50 font-serif italic">
+            Summoning heroes from the Forgotten Realms…
           </div>
-        )}
-
-        {/* ── Custom tab — original form, untouched ── */}
-        {charTab === "custom" && (
-          <div className="space-y-4">
-            {/* Identity */}
-            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
-              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-                Identity
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className={labelCls}>Name</label>
-                  <input
-                    className={inputCls}
-                    value={char.name}
-                    onChange={set("name")}
-                    placeholder="Thalindra"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>Race</label>
-                  <select
-                    className={inputCls}
-                    value={char.race}
-                    onChange={set("race")}
-                  >
-                    <option value="">— Choose —</option>
-                    {RACES.map((r) => (
-                      <option key={r}>{r}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>Class</label>
-                  <select
-                    className={inputCls}
-                    value={char.charClass}
-                    onChange={set("charClass")}
-                  >
-                    <option value="">— Choose —</option>
-                    {CLASSES.map((c) => (
-                      <option key={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>Background</label>
-                  <select
-                    className={inputCls}
-                    value={char.background}
-                    onChange={set("background")}
-                  >
-                    <option value="">— Choose —</option>
-                    {BACKGROUNDS.map((b) => (
-                      <option key={b}>{b}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Stats */}
-            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-3">
-              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-                Ability Scores
-              </p>
-              <div className="grid grid-cols-6 gap-2">
-                {(["str", "dex", "con", "int", "wis", "cha"] as const).map(
-                  (s) => (
-                    <div key={s} className="flex flex-col items-center gap-1">
-                      <label className={labelCls}>{s.toUpperCase()}</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        className={inputCls + " text-center px-1"}
-                        value={char[s]}
-                        onChange={set(s)}
-                        placeholder="10"
-                      />
-                    </div>
-                  ),
-                )}
-              </div>
-              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2 mt-1">
-                Combat
-              </p>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <label className={labelCls}>Max HP</label>
-                  <input
-                    type="number"
-                    className={inputCls}
-                    value={char.hp}
-                    onChange={set("hp")}
-                    placeholder="10"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>AC</label>
-                  <input
-                    type="number"
-                    className={inputCls}
-                    value={char.ac}
-                    onChange={set("ac")}
-                    placeholder="12"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelCls}>Level</label>
-                  <select
-                    className={inputCls}
-                    value={char.level}
-                    onChange={set("level")}
-                  >
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <option key={n}>{n}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div className="bg-black/30 border border-amber-950/50 rounded-md p-4 space-y-2">
-              <p className="text-[0.6rem] tracking-[0.2em] uppercase text-amber-800/50 border-b border-amber-950/40 pb-2">
-                Notes
-              </p>
-              <label className={labelCls}>
-                Equipment, spells, traits, backstory…
-              </label>
-              <textarea
-                className={inputCls + " min-h-[70px] resize-y"}
-                value={char.notes}
-                onChange={set("notes")}
-                placeholder="Carries a family heirloom dagger. Speaks Elvish. Seeking a missing sister last seen near Phandalin..."
+        ) : premadeChars.length === 0 ? (
+          <div className="text-center py-10 text-amber-900/50 font-serif italic">
+            No heroes found.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {premadeChars.map((c) => (
+              <CharacterCard
+                key={c.id}
+                char={c}
+                selected={selectedPremade?.id === c.id}
+                onSelect={() => setSelectedPremade(c)}
               />
-            </div>
+            ))}
           </div>
         )}
 
@@ -463,10 +242,7 @@ export default function HomePage() {
 
         <button
           onClick={startAdventure}
-          disabled={
-            isCreating ||
-            (charTab === "premade" && !selectedPremade && !loadingChars)
-          }
+          disabled={isCreating || (!selectedPremade && !loadingChars)}
           className="w-full py-4 bg-gradient-to-br from-amber-900 to-amber-800 hover:from-amber-800 hover:to-amber-700 disabled:opacity-50 border border-amber-700/60 text-amber-100 font-serif text-lg rounded tracking-widest transition-all shadow-lg shadow-amber-950/50"
         >
           {isCreating
@@ -479,13 +255,6 @@ export default function HomePage() {
         >
           ← Back
         </button>
-
-        {charTab === "custom" && (
-          <p className="text-center text-amber-950/60 font-serif italic text-sm">
-            All fields optional — the DM will generate a character if left
-            blank.
-          </p>
-        )}
       </div>
     </main>
   );

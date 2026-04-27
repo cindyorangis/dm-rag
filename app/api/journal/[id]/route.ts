@@ -44,7 +44,10 @@ export async function PATCH(
     if (status !== undefined) updates.status = status;
 
     if (Object.keys(updates).length === 0) {
-      return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+      return NextResponse.json(
+        { error: "No fields to update" },
+        { status: 400 },
+      );
     }
 
     const { data, error } = await supabaseAdmin
