@@ -82,10 +82,12 @@ function mod(score: number | null): string {
 export default function CharacterCard({
   char,
   selected,
+  compact = false,
   onSelect,
 }: {
   char: PremadeCharacter;
   selected: boolean;
+  compact?: boolean;
   onSelect: () => void;
 }) {
   const colour = classColour(char.class);
@@ -102,10 +104,18 @@ export default function CharacterCard({
         }`}
       style={selected ? { boxShadow: `0 0 20px ${colour.glow}` } : undefined}
     >
-      <div className="flex items-start justify-between gap-2 px-4 pb-2.5 pt-3.5">
+      <div
+        className={`flex items-start justify-between gap-2 ${
+          compact ? "px-3.5 pb-2 pt-3" : "px-4 pb-2.5 pt-3.5"
+        }`}
+      >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate font-serif text-lg leading-tight text-amber-100">
+            <span
+              className={`truncate font-serif leading-tight text-amber-100 ${
+                compact ? "text-base" : "text-lg"
+              }`}
+            >
               {char.name}
             </span>
             {selected && (
@@ -114,8 +124,12 @@ export default function CharacterCard({
               </span>
             )}
           </div>
-          <p className="mt-0.5 font-serif text-sm text-amber-200/80 italic">
-            {[char.race, char.background].filter(Boolean).join(" · ")}
+          <p
+            className={`mt-0.5 font-serif text-amber-200/80 italic ${
+              compact ? "line-clamp-1 text-xs" : "text-sm"
+            }`}
+          >
+            {[char.race, char.background].filter(Boolean).join(" - ")}
           </p>
         </div>
 
@@ -131,42 +145,56 @@ export default function CharacterCard({
         </div>
       </div>
 
-      <div className="px-4 pb-3.5">
-        <div className="mt-1 grid grid-cols-8 gap-1.5">
-          <div className="col-span-2 flex gap-1.5">
-            <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
-              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
-                HP
+      {compact ? (
+        <div className="flex items-center justify-between border-t border-amber-900/35 bg-black/20 px-3.5 py-2 text-xs text-amber-200/85">
+          <span>HP {char.max_hp ?? "-"}</span>
+          <span>AC {char.ac ?? "-"}</span>
+          <span>PB +{char.proficiency_bonus ?? 2}</span>
+        </div>
+      ) : (
+        <div className="px-4 pb-3.5">
+          <div className="mt-1 grid grid-cols-8 gap-1.5">
+            <div className="col-span-2 flex gap-1.5">
+              <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
+                <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
+                  HP
+                </div>
+                <div className="font-serif text-sm text-amber-100">
+                  {char.max_hp ?? "-"}
+                </div>
               </div>
-              <div className="font-serif text-sm text-amber-100">{char.max_hp ?? "-"}</div>
-            </div>
-            <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
-              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
-                AC
+              <div className="flex-1 rounded bg-black/35 py-1.5 text-center">
+                <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
+                  AC
+                </div>
+                <div className="font-serif text-sm text-amber-100">
+                  {char.ac ?? "-"}
+                </div>
               </div>
-              <div className="font-serif text-sm text-amber-100">{char.ac ?? "-"}</div>
             </div>
+
+            {scores.map((ability) => (
+              <div key={ability} className="rounded bg-black/35 py-1.5 text-center">
+                <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
+                  {ability}
+                </div>
+                <div className="font-serif text-xs leading-tight text-amber-100">
+                  {char[ability] ?? 10}
+                </div>
+                <div className="text-[0.6rem] text-amber-300/80">
+                  {mod(char[ability])}
+                </div>
+              </div>
+            ))}
           </div>
 
-          {scores.map((ability) => (
-            <div key={ability} className="rounded bg-black/35 py-1.5 text-center">
-              <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
-                {ability}
-              </div>
-              <div className="font-serif text-xs leading-tight text-amber-100">
-                {char[ability] ?? 10}
-              </div>
-              <div className="text-[0.6rem] text-amber-300/80">{mod(char[ability])}</div>
-            </div>
-          ))}
+          {char.personality_traits && (
+            <p className="mt-2.5 line-clamp-2 font-serif text-xs leading-relaxed text-amber-200/80 italic">
+              {`"${char.personality_traits}"`}
+            </p>
+          )}
         </div>
-
-        {char.personality_traits && (
-          <p className="mt-2.5 line-clamp-2 font-serif text-xs leading-relaxed text-amber-200/80 italic">
-            {`"${char.personality_traits}"`}
-          </p>
-        )}
-      </div>
+      )}
     </button>
   );
 }

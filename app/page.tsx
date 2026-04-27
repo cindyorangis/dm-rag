@@ -49,6 +49,7 @@ export default function HomePage() {
   const router = useRouter();
   const [screen, setScreen] = useState<Screen>("home");
   const [premadeChars, setPremadeChars] = useState<PremadeCharacter[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [loadingChars, setLoadingChars] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [creatingCharacterId, setCreatingCharacterId] = useState<string | null>(
@@ -92,6 +93,24 @@ export default function HomePage() {
       setCreatingCharacterId(null);
     }
   };
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const filteredChars = premadeChars.filter((char) => {
+    if (!normalizedSearch) return true;
+
+    const searchable = [
+      char.name,
+      char.class,
+      char.race,
+      char.background,
+      char.alignment,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return searchable.includes(normalizedSearch);
+  });
 
   if (screen === "home") {
     return (
@@ -141,6 +160,7 @@ export default function HomePage() {
               setIsCreating(false);
               setCreatingCharacterId(null);
               setError(null);
+              setSearchQuery("");
               setScreen("character");
             }}
             className="w-full rounded border border-amber-700/60 bg-gradient-to-br from-amber-900 to-amber-800 py-4 font-serif text-lg tracking-[0.12em] text-white shadow-lg shadow-amber-950/50 transition-all hover:from-amber-800 hover:to-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
@@ -167,7 +187,7 @@ export default function HomePage() {
           "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(120,70,15,0.12) 0%, #0d0a07 70%)",
       }}
     >
-      <div className="w-full max-w-2xl space-y-6">
+      <div className="w-full max-w-6xl space-y-6">
         <div className="mb-1 px-2 text-center">
           <h2 className="font-serif text-3xl tracking-[0.14em] text-amber-100">
             Choose Your Hero
@@ -191,14 +211,38 @@ export default function HomePage() {
               isCreating ? "pointer-events-none opacity-80" : ""
             }`}
           >
-            {premadeChars.map((c) => (
-              <CharacterCard
-                key={c.id}
-                char={c}
-                selected={creatingCharacterId === c.id}
-                onSelect={() => startAdventure(c)}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-sans text-sm text-amber-200/80">
+                {filteredChars.length} of {premadeChars.length} heroes shown
+              </p>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search name, class, race..."
+                className="w-full rounded-md border border-amber-700/40 bg-black/35 px-3 py-2 text-sm text-amber-100 placeholder:text-amber-300/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 sm:max-w-xs"
               />
-            ))}
+            </div>
+
+            {filteredChars.length === 0 ? (
+              <div className="py-10 text-center font-serif text-base text-amber-300/75 italic">
+                No heroes match your search.
+              </div>
+            ) : (
+              <div className="max-h-[68vh] overflow-y-auto pr-1">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {filteredChars.map((c) => (
+                    <CharacterCard
+                      key={c.id}
+                      char={c}
+                      compact
+                      selected={creatingCharacterId === c.id}
+                      onSelect={() => startAdventure(c)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
