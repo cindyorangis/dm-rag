@@ -23,12 +23,12 @@ export function HintPanel({ hints, onSelect }: HintPanelProps) {
     <div className="mt-2">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-[0.6rem] tracking-widest uppercase text-stone-600 hover:text-amber-700/70 font-sans transition-colors"
+        className="flex items-center gap-1.5 text-xs uppercase tracking-[0.12em] text-stone-300 transition-colors hover:text-amber-200"
       >
         <span
           className={`transition-transform duration-200 ${open ? "rotate-90" : ""}`}
         >
-          ▶
+          {">"}
         </span>
         What can I do?
       </button>
@@ -46,11 +46,11 @@ export function HintPanel({ hints, onSelect }: HintPanelProps) {
                 className="w-full text-left flex items-center gap-2 px-3 py-2 rounded border border-stone-700/30 bg-stone-900/40 hover:bg-stone-800/60 hover:border-amber-800/40 transition-all group"
               >
                 <span
-                  className={`text-[0.45rem] tracking-widest uppercase px-1.5 py-0.5 rounded border font-sans shrink-0 ${colorClass}`}
+                  className={`shrink-0 rounded border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-[0.12em] ${colorClass}`}
                 >
                   {hint.tag}
                 </span>
-                <span className="font-serif text-sm text-stone-400 group-hover:text-stone-200 transition-colors">
+                <span className="font-serif text-base text-stone-100 transition-colors group-hover:text-amber-100">
                   {hint.text}
                 </span>
               </button>

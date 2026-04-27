@@ -66,14 +66,18 @@ export default function SessionPage() {
   }, [id]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchSessionData();
   }, [fetchSessionData]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!isStreaming) fetchSessionData();
   }, [isStreaming, fetchSessionData]);
   useEffect(() => {
-    if (combatState?.is_active && !combatState.awaiting_player_initiative)
+    if (combatState?.is_active && !combatState.awaiting_player_initiative) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSidebarTab("combat");
+    }
   }, [combatState?.is_active, combatState?.awaiting_player_initiative]);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -171,19 +175,19 @@ export default function SessionPage() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-screen bg-stone-950 text-stone-100 overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-stone-950 text-stone-100">
       {/* ── Chat column ────────────────────────────────────────────────────── */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
-        <div className="border-b border-stone-800 px-4 py-3 flex justify-between items-center shrink-0">
+        <div className="flex shrink-0 items-center justify-between border-b border-stone-700 px-5 py-3.5">
           <div className="flex items-center gap-3">
-            <h1 className="font-serif text-amber-400 text-sm tracking-widest uppercase">
+            <h1 className="font-serif text-base uppercase tracking-[0.16em] text-amber-300 md:text-lg">
               Lost Mine of Phandelver
             </h1>
             {combatState?.is_active &&
               !combatState.awaiting_player_initiative && (
-                <span className="text-[0.55rem] bg-red-950/70 border border-red-800/60 text-red-400 px-2 py-0.5 rounded uppercase tracking-widest animate-pulse">
-                  ⚔ Combat — Round {combatState.round}
+                <span className="animate-pulse rounded border border-red-700/70 bg-red-950/70 px-2.5 py-0.5 text-[0.65rem] uppercase tracking-[0.14em] text-red-200">
+                  Combat - Round {combatState.round}
                 </span>
               )}
           </div>
@@ -195,28 +199,28 @@ export default function SessionPage() {
                 )
               }
               disabled={isStreaming}
-              className="text-stone-600 hover:text-amber-700/80 text-xs disabled:opacity-30 transition-colors font-serif italic"
+              className="font-serif text-sm italic text-stone-300 transition-colors hover:text-amber-200 disabled:opacity-40"
             >
               Who am I?
             </button>
             <button
               onClick={endSession}
               disabled={isStreaming || messages.length === 0 || isEndingSession}
-              className="text-stone-500 hover:text-stone-300 text-xs disabled:opacity-30 transition-colors"
+              className="text-sm text-stone-300 transition-colors hover:text-stone-100 disabled:opacity-40"
             >
-              {isEndingSession ? "Writing journal…" : "End Session →"}
+              {isEndingSession ? "Writing journal..." : "End Session"}
             </button>
           </div>
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+        <div className="flex-1 space-y-6 overflow-y-auto px-5 py-6">
           {isLoading ? (
-            <p className="text-center text-stone-500 italic mt-20 animate-pulse">
-              The torches flicker as your adventure loads…
+            <p className="mt-20 animate-pulse text-center font-serif text-base italic text-stone-300/80">
+              The torches flicker as your adventure loads...
             </p>
           ) : messages.length === 0 ? (
-            <p className="text-center text-stone-500 italic mt-20">
+            <p className="mt-20 text-center font-serif text-base italic text-stone-300/80">
               Your adventure begins. What do you do?
             </p>
           ) : null}
@@ -244,7 +248,7 @@ export default function SessionPage() {
 
           {/* Attack / check / save / damage rollers */}
           {pendingRolls.length > 0 && !isStreaming && (
-            <div className="max-w-2xl mx-auto space-y-2">
+            <div className="mx-auto max-w-3xl space-y-2">
               {pendingRolls.map((roll, i) => (
                 <DiceRoller
                   key={i}
@@ -255,22 +259,24 @@ export default function SessionPage() {
             </div>
           )}
 
-          {error && <p className="text-center text-red-400 text-sm">{error}</p>}
+          {error && (
+            <p className="text-center text-base text-red-300">{error}</p>
+          )}
           <div ref={bottomRef} />
         </div>
 
         {/* Input */}
-        <div className="border-t border-stone-800 px-4 py-4 shrink-0">
+        <div className="shrink-0 border-t border-stone-700 px-5 py-4">
           {inputLocked ? (
-            <p className="text-center text-amber-700/60 font-serif italic text-sm py-1">
+            <p className="py-1 text-center font-serif text-base italic text-amber-200/90">
               {awaitingInitiative
-                ? "Roll your initiative above before acting…"
-                : "Roll the dice above to continue…"}
+                ? "Roll your initiative above before acting..."
+                : "Roll the dice above to continue..."}
             </p>
           ) : (
-            <div className="max-w-2xl mx-auto flex gap-3 items-end">
+            <div className="mx-auto flex max-w-3xl items-end gap-3">
               <textarea
-                className="flex-1 bg-stone-900 border border-stone-700 rounded-lg px-4 py-3 text-stone-100 placeholder-stone-500 resize-none focus:outline-none focus:border-amber-600 text-sm"
+                className="flex-1 resize-none rounded-lg border border-stone-600 bg-stone-900 px-4 py-3 text-base text-stone-100 placeholder-stone-400 focus:border-amber-400 focus:outline-none"
                 rows={2}
                 placeholder="What do you do?"
                 value={input}
@@ -281,7 +287,7 @@ export default function SessionPage() {
               {isStreaming ? (
                 <button
                   onClick={cancelStream}
-                  className="px-4 py-3 bg-stone-700 hover:bg-stone-600 text-stone-300 rounded-lg text-sm transition-colors"
+                  className="rounded-lg bg-stone-700 px-4 py-3 text-base text-stone-100 transition-colors hover:bg-stone-600"
                 >
                   Stop
                 </button>
@@ -289,7 +295,7 @@ export default function SessionPage() {
                 <button
                   onClick={handleSubmit}
                   disabled={!input.trim()}
-                  className="px-4 py-3 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white rounded-lg text-sm transition-colors"
+                  className="rounded-lg bg-amber-700 px-4 py-3 text-base text-white transition-colors hover:bg-amber-600 disabled:opacity-40"
                 >
                   Send
                 </button>
@@ -300,9 +306,9 @@ export default function SessionPage() {
       </div>
 
       {/* ── Sidebar ──────────────────────────────────────────────────────────── */}
-      <div className="w-72 shrink-0 border-l border-stone-800 flex flex-col bg-stone-950/80 overflow-hidden">
+      <div className="flex w-80 shrink-0 flex-col overflow-hidden border-l border-stone-700 bg-stone-950/90">
         {/* Tab bar */}
-        <div className="flex border-b border-stone-800 shrink-0">
+        <div className="flex shrink-0 border-b border-stone-700">
           {(
             [
               { key: "character", label: "Character" },
@@ -313,27 +319,31 @@ export default function SessionPage() {
             <button
               key={tab.key}
               onClick={() => setSidebarTab(tab.key)}
-              className={`flex-1 py-2.5 text-[0.6rem] tracking-widest uppercase font-sans transition-colors relative ${sidebarTab === tab.key ? "text-amber-400 bg-stone-900/50" : "text-stone-600 hover:text-stone-400"}`}
+              className={`relative flex-1 py-3 text-xs uppercase tracking-[0.12em] transition-colors ${
+                sidebarTab === tab.key
+                  ? "bg-stone-900/70 text-amber-200"
+                  : "text-stone-300 hover:text-stone-100"
+              }`}
             >
               {tab.label}
               {tab.key === "combat" && combatState?.is_active && (
                 <span className="absolute top-1.5 right-2 w-1.5 h-1.5 bg-red-500 rounded-full" />
               )}
               {sidebarTab === tab.key && (
-                <span className="absolute bottom-0 left-0 right-0 h-px bg-amber-700/60" />
+                <span className="absolute bottom-0 left-0 right-0 h-px bg-amber-400/70" />
               )}
             </button>
           ))}
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        <div className="flex-1 space-y-3 overflow-y-auto p-4">
           {/* CHARACTER TAB */}
           {sidebarTab === "character" && (
             <>
               {!hasCharacter ? (
                 <div className="text-center mt-8 space-y-3">
-                  <p className="text-stone-600 italic font-serif text-sm">
+                  <p className="font-serif text-base italic text-stone-300/80">
                     Character data not loaded.
                   </p>
                   <button
@@ -343,9 +353,9 @@ export default function SessionPage() {
                       )
                     }
                     disabled={isStreaming}
-                    className="text-amber-800/70 hover:text-amber-700 text-xs font-serif italic disabled:opacity-30 transition-colors"
+                    className="font-serif text-sm italic text-amber-200 transition-colors hover:text-amber-100 disabled:opacity-40"
                   >
-                    Ask the DM →
+                    Ask the DM
                   </button>
                 </div>
               ) : (
@@ -353,17 +363,17 @@ export default function SessionPage() {
                   <SidebarSection title="Adventurer">
                     <div className="space-y-0.5">
                       {character.name && (
-                        <p className="font-serif text-amber-300 text-base leading-tight">
+                        <p className="font-serif text-lg leading-tight text-amber-200">
                           {character.name}
                         </p>
                       )}
                       {character.identity && (
-                        <p className="text-stone-400 text-xs font-serif">
+                        <p className="font-serif text-sm text-stone-200">
                           {character.identity}
                         </p>
                       )}
                       {character.background && (
-                        <p className="text-stone-500 text-xs font-serif italic">
+                        <p className="font-serif text-sm italic text-stone-300">
                           {character.background}
                         </p>
                       )}
@@ -373,21 +383,21 @@ export default function SessionPage() {
                     <SidebarSection title="Combat Stats">
                       <div className="flex gap-3">
                         {character.hp && (
-                          <div className="flex-1 flex flex-col items-center bg-black/40 border border-red-950/50 rounded p-2 gap-0.5">
-                            <span className="text-[0.5rem] tracking-widest uppercase text-red-900/80 font-sans">
+                          <div className="flex flex-1 flex-col items-center gap-0.5 rounded border border-red-800/60 bg-black/40 p-2">
+                            <span className="text-[0.65rem] uppercase tracking-[0.12em] text-red-200">
                               Max HP
                             </span>
-                            <span className="text-red-300/90 font-serif text-xl leading-none">
+                            <span className="font-serif text-2xl leading-none text-red-200">
                               {character.hp}
                             </span>
                           </div>
                         )}
                         {character.ac && (
-                          <div className="flex-1 flex flex-col items-center bg-black/40 border border-blue-950/50 rounded p-2 gap-0.5">
-                            <span className="text-[0.5rem] tracking-widest uppercase text-blue-900/80 font-sans">
+                          <div className="flex flex-1 flex-col items-center gap-0.5 rounded border border-sky-800/60 bg-black/40 p-2">
+                            <span className="text-[0.65rem] uppercase tracking-[0.12em] text-sky-200">
                               AC
                             </span>
-                            <span className="text-blue-300/90 font-serif text-xl leading-none">
+                            <span className="font-serif text-2xl leading-none text-sky-200">
                               {character.ac}
                             </span>
                           </div>
@@ -411,7 +421,7 @@ export default function SessionPage() {
                   )}
                   {character.notes && (
                     <SidebarSection title="Notes">
-                      <p className="text-stone-400 font-serif italic text-xs leading-relaxed">
+                      <p className="font-serif text-sm italic leading-relaxed text-stone-200/90">
                         {character.notes}
                       </p>
                     </SidebarSection>
@@ -426,27 +436,26 @@ export default function SessionPage() {
             <>
               {!combatState?.is_active ? (
                 <div className="text-center mt-8 space-y-2">
-                  <p className="text-stone-600 font-serif italic text-sm">
+                  <p className="font-serif text-base italic text-stone-300/80">
                     No active combat.
                   </p>
-                  <p className="text-stone-700 text-xs">
+                  <p className="text-sm text-stone-300/75">
                     Initiative order appears here when combat begins.
                   </p>
                 </div>
               ) : combatState.awaiting_player_initiative ? (
                 <div className="text-center mt-8 space-y-2 px-2">
-                  <div className="text-2xl">🎲</div>
-                  <p className="text-amber-700/80 font-serif italic text-sm">
-                    Waiting for your initiative roll…
+                  <p className="font-serif text-base italic text-amber-200/90">
+                    Waiting for your initiative roll...
                   </p>
-                  <p className="text-stone-600 text-xs">
+                  <p className="text-sm text-stone-300/75">
                     Roll in the chat to set the order.
                   </p>
                 </div>
               ) : (
                 <>
                   <SidebarSection
-                    title={`Round ${combatState.round} — Initiative Order`}
+                    title={`Round ${combatState.round} - Initiative Order`}
                   >
                     <div className="space-y-2">
                       {[...activeCombatants]
@@ -469,9 +478,9 @@ export default function SessionPage() {
                           .map((entry, i) => (
                             <p
                               key={i}
-                              className="text-stone-500 text-[0.65rem] font-serif leading-snug border-b border-stone-800/50 pb-1 last:border-0"
+                              className="border-b border-stone-700/60 pb-1 text-xs leading-snug text-stone-200/85 last:border-0"
                             >
-                              <span className="text-amber-900/60 mr-1">
+                              <span className="mr-1 text-amber-300/90">
                                 R{entry.round}
                               </span>
                               {entry.description}
@@ -491,27 +500,23 @@ export default function SessionPage() {
               <SidebarSection title="Session Stats">
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-stone-500 text-xs font-sans">
-                      Messages
-                    </span>
-                    <span className="text-amber-400/80 font-serif text-sm">
+                    <span className="text-sm text-stone-300">Messages</span>
+                    <span className="font-serif text-base text-amber-200">
                       {messages.length}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500 text-xs font-sans">
-                      DM Responses
-                    </span>
-                    <span className="text-amber-400/80 font-serif text-sm">
+                    <span className="text-sm text-stone-300">DM Responses</span>
+                    <span className="font-serif text-base text-amber-200">
                       {messages.filter((m) => m.role === "assistant").length}
                     </span>
                   </div>
                   {combatState && (
                     <div className="flex justify-between">
-                      <span className="text-stone-500 text-xs font-sans">
+                      <span className="text-sm text-stone-300">
                         Combat Rounds
                       </span>
-                      <span className="text-amber-400/80 font-serif text-sm">
+                      <span className="font-serif text-base text-amber-200">
                         {combatState.round}
                       </span>
                     </div>
@@ -519,33 +524,33 @@ export default function SessionPage() {
                 </div>
               </SidebarSection>
               <SidebarSection title="Quick Reference">
-                <div className="space-y-2 text-xs font-serif text-stone-500">
+                <div className="space-y-2 text-sm font-serif text-stone-200/90">
                   <p>
-                    <span className="text-amber-800/70">Attack roll:</span> d20
-                    + ability mod + proficiency
+                    <span className="text-amber-200">Attack roll:</span> d20 +
+                    ability mod + proficiency
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Saving throw:</span> d20
-                    + ability mod
+                    <span className="text-amber-200">Saving throw:</span> d20 +
+                    ability mod
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Advantage:</span> roll
+                    <span className="text-amber-200">Advantage:</span> roll
                     2d20, take higher
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Disadvantage:</span>{" "}
-                    roll 2d20, take lower
+                    <span className="text-amber-200">Disadvantage:</span> roll
+                    2d20, take lower
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Death saves:</span> 3
+                    <span className="text-amber-200">Death saves:</span> 3
                     successes stable, 3 fails dead
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Short rest:</span> spend
+                    <span className="text-amber-200">Short rest:</span> spend
                     Hit Dice to heal
                   </p>
                   <p>
-                    <span className="text-amber-800/70">Long rest:</span> regain
+                    <span className="text-amber-200">Long rest:</span> regain
                     all HP + half Hit Dice
                   </p>
                 </div>
@@ -564,9 +569,9 @@ export default function SessionPage() {
                     <button
                       key={phrase}
                       onClick={() => setInput(phrase)}
-                      className="w-full text-left text-[0.65rem] text-stone-600 hover:text-amber-600/80 font-serif italic transition-colors py-0.5"
+                      className="w-full py-0.5 text-left font-serif text-sm italic text-stone-200/90 transition-colors hover:text-amber-200"
                     >
-                      "{phrase}"
+                      {phrase}
                     </button>
                   ))}
                 </div>

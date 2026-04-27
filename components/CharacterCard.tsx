@@ -1,6 +1,9 @@
 ﻿import { PremadeCharacter } from "@/app/page.types";
 
-const CLASS_COLOURS: Record<string, { border: string; glow: string; badge: string }> = {
+const CLASS_COLOURS: Record<
+  string,
+  { border: string; glow: string; badge: string }
+> = {
   Barbarian: {
     border: "border-red-800/60",
     glow: "rgba(180,30,30,0.15)",
@@ -174,7 +177,10 @@ export default function CharacterCard({
             </div>
 
             {scores.map((ability) => (
-              <div key={ability} className="rounded bg-black/35 py-1.5 text-center">
+              <div
+                key={ability}
+                className="rounded bg-black/35 py-1.5 text-center"
+              >
                 <div className="text-[0.55rem] uppercase tracking-[0.14em] text-amber-300/70">
                   {ability}
                 </div>

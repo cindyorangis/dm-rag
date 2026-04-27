@@ -1,4 +1,4 @@
-export default function StatBlock({
+﻿export default function StatBlock({
   label,
   value,
   mod,
@@ -8,14 +8,14 @@ export default function StatBlock({
   mod: string;
 }) {
   return (
-    <div className="flex flex-col items-center bg-black/40 border border-amber-950/50 rounded p-1.5 gap-0.5">
-      <span className="text-[0.5rem] tracking-widest uppercase text-amber-900/70 font-sans">
+    <div className="flex flex-col items-center gap-0.5 rounded border border-stone-700/70 bg-black/35 p-2">
+      <span className="text-[0.65rem] uppercase tracking-[0.12em] text-amber-200/90">
         {label}
       </span>
-      <span className="text-amber-200/90 font-serif text-sm leading-none">
-        {value || "—"}
+      <span className="font-serif text-base leading-none text-stone-100">
+        {value || "-"}
       </span>
-      <span className="text-[0.6rem] text-amber-700/80 font-sans">{mod}</span>
+      <span className="text-xs text-amber-200/90">{mod}</span>
     </div>
   );
 }

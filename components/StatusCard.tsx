@@ -7,19 +7,19 @@ interface StatusCardProps {
 export function StatusCard({ items }: StatusCardProps) {
   if (!items.length) return null;
   return (
-    <div className="mt-3 border border-amber-900/40 bg-amber-950/20 rounded-md overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-amber-900/30 bg-amber-950/30">
-        <span className="text-[0.5rem] tracking-[0.2em] uppercase text-amber-700/80 font-sans">
+    <div className="mt-3 overflow-hidden rounded-md border border-amber-700/50 bg-amber-950/25">
+      <div className="border-b border-amber-700/40 bg-amber-950/40 px-3 py-2">
+        <span className="text-xs uppercase tracking-[0.14em] text-amber-200">
           Quest Status
         </span>
       </div>
-      <ul className="px-3 py-2 space-y-1">
+      <ul className="space-y-1 px-3 py-2.5">
         {items.map((item, i) => (
           <li
             key={i}
-            className="flex items-start gap-2 text-xs font-serif text-stone-400"
+            className="flex items-start gap-2 font-serif text-sm text-stone-100"
           >
-            <span className="text-amber-800/60 mt-0.5 shrink-0">◆</span>
+            <span className="mt-0.5 shrink-0 text-amber-300">-</span>
             <span>{item}</span>
           </li>
         ))}

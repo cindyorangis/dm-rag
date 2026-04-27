@@ -6,13 +6,13 @@ export default function SidebarSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="border border-amber-950/50 rounded-md overflow-hidden">
-      <div className="bg-amber-950/30 px-3 py-1.5 border-b border-amber-950/50">
-        <span className="text-[0.55rem] tracking-[0.2em] uppercase text-amber-800/80 font-sans">
+    <div className="overflow-hidden rounded-md border border-stone-700/70 bg-stone-900/35">
+      <div className="border-b border-stone-700/70 bg-stone-900/80 px-3 py-2">
+        <span className="text-xs uppercase tracking-[0.14em] text-amber-200/90">
           {title}
         </span>
       </div>
-      <div className="p-3">{children}</div>
+      <div className="p-3.5">{children}</div>
     </div>
   );
 }

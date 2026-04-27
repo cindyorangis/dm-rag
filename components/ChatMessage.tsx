@@ -34,8 +34,8 @@ export function DMMessage({
   const narrative = stripRollTags(parsed.narrative);
 
   return (
-    <div className="max-w-2xl mx-auto text-left">
-      <div className="prose prose-invert prose-stone max-w-none font-serif text-stone-200 leading-relaxed">
+    <div className="mx-auto max-w-3xl text-left">
+      <div className="prose prose-invert prose-stone max-w-none font-serif text-base leading-relaxed text-stone-100">
         {narrative}
         {message.streaming && (
           <span className="inline-block w-2 h-4 ml-1 bg-amber-400 animate-pulse" />
@@ -59,8 +59,8 @@ interface UserMessageProps {
 
 export function UserMessage({ message }: UserMessageProps) {
   return (
-    <div className="max-w-2xl mx-auto text-right">
-      <span className="inline-block bg-stone-800 text-stone-300 px-4 py-2 rounded-lg text-sm">
+    <div className="mx-auto max-w-3xl text-right">
+      <span className="inline-block rounded-lg border border-stone-700 bg-stone-800 px-4 py-2 text-base text-stone-100">
         {message.content}
       </span>
     </div>
