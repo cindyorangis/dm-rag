@@ -52,10 +52,14 @@ async function generateJournalEntry(
   return data.message?.content ?? "";
 }
 
-async function markSessionComplete(sessionId: string, journalEntry: string) {
+async function saveJournalEntry(
+  sessionId: string,
+  journalEntry: string,
+  status: "paused" | "completed",
+) {
   const { error } = await supabaseAdmin
     .from("sessions")
-    .update({ status: "complete", journal_entry: journalEntry })
+    .update({ status, journal_entry: journalEntry })
     .eq("id", sessionId);
 
   if (error) throw new Error(`Failed to save journal: ${error.message}`);
@@ -64,7 +68,7 @@ async function markSessionComplete(sessionId: string, journalEntry: string) {
 // POST /api/journal
 export async function POST(req: NextRequest) {
   try {
-    const { sessionId, messages } = await req.json();
+    const { sessionId, messages, pause = false } = await req.json();
 
     if (!sessionId || !messages?.length) {
       return NextResponse.json(
@@ -73,20 +77,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Filter out any still-streaming placeholders just in case
     const cleanMessages = messages.filter(
       (m: { role: string; content: string }) => m.content.trim().length > 0,
     );
 
     const journalEntry = await generateJournalEntry(cleanMessages);
-    await markSessionComplete(sessionId, journalEntry);
+    const status = pause ? "paused" : "completed";
+    await saveJournalEntry(sessionId, journalEntry, status);
 
-    return NextResponse.json({ journalEntry });
+    return NextResponse.json({ journalEntry, status });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
-// GET /api/journal/[id]
-// (handled in app/api/journal/[id]/route.ts below)
