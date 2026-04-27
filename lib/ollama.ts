@@ -1,5 +1,4 @@
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3";
+import { getLlmBaseUrl, getLlmChatModel, readLlmError } from "@/lib/llmClient";
 
 type OllamaChatResponse = {
   error?: string;
@@ -12,11 +11,11 @@ type OllamaChatResponse = {
 };
 
 export function getOllamaBaseUrl() {
-  return OLLAMA_BASE_URL;
+  return getLlmBaseUrl("ollama");
 }
 
 export function getOllamaChatModel() {
-  return OLLAMA_CHAT_MODEL;
+  return getLlmChatModel("ollama");
 }
 
 export async function readOllamaChatContent(res: Response): Promise<string> {
@@ -43,10 +42,5 @@ export async function readOllamaChatContent(res: Response): Promise<string> {
 }
 
 export async function readOllamaError(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as OllamaChatResponse;
-    return data.error || `Ollama request failed with status ${res.status}`;
-  } catch {
-    return `Ollama request failed with status ${res.status}`;
-  }
+  return readLlmError(res, "ollama");
 }
