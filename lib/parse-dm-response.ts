@@ -158,7 +158,9 @@ function extractFreeformStatus(raw: string): {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function parseDMResponse(raw: string): ParsedDMResponse {
-  console.log("=== RAW DM RESPONSE ===\n", raw);
+  if (process.env.NODE_ENV === "development" && raw.trim()) {
+    console.log("=== RAW DM RESPONSE ===\n", raw);
+  }
   // Try structured first — clean, reliable
   const structured = parseStructured(raw);
   if (structured)

@@ -13,7 +13,6 @@ import {
   advanceTurn,
   appendLog,
   endCombat,
-  sortByInitiative,
   rollAllInitiatives,
 } from "@/lib/combat/engine";
 import {
@@ -22,7 +21,12 @@ import {
 } from "@/lib/combat/encounters";
 import { v4 as uuidv4 } from "uuid";
 import type { CombatState, Combatant } from "@/lib/combat/types";
-import { embedText, retrieveChunks } from "@/lib/rag";
+import { retrieveChunks } from "@/lib/rag";
+import {
+  getOllamaBaseUrl,
+  getOllamaChatModel,
+  readOllamaError,
+} from "@/lib/ollama";
 
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
@@ -43,15 +47,20 @@ export async function POST(req: NextRequest) {
   const messages = [...conversationHistory, { role: "user", content: message }];
 
   // 5. Call Ollama (streaming)
-  const ollamaRes = await fetch(`${process.env.OLLAMA_BASE_URL}/api/chat`, {
+  const ollamaRes = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.OLLAMA_CHAT_MODEL,
+      model: getOllamaChatModel(),
       messages: [{ role: "system", content: systemPrompt }, ...messages],
       stream: true,
     }),
   });
+
+  if (!ollamaRes.ok) {
+    const error = await readOllamaError(ollamaRes);
+    return NextResponse.json({ error }, { status: 500 });
+  }
 
   // 6. Stream response back to client, collect full text for post-processing
   const encoder = new TextEncoder();
@@ -76,6 +85,15 @@ export async function POST(req: NextRequest) {
         for (const line of lines) {
           try {
             const json = JSON.parse(line);
+            if (json.error) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ error: json.error })}\n\n`,
+                ),
+              );
+              controller.close();
+              return;
+            }
             const token = json.message?.content ?? "";
             fullResponse += token;
             controller.enqueue(

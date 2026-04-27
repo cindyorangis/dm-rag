@@ -46,9 +46,9 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 
 Each source book is parsed, chunked into ~500 token sections, and converted into vector embeddings via Ollama. These embeddings are stored in a Supabase database using the pgvector extension, enabling semantic search across all four books simultaneously.
 
-### 2. Character Creation
+### 2. Character Selection
 
-Before a session begins, the player is presented with an optional character sheet. They can fill in name, race, class, background, ability scores, HP, AC, level, and freeform notes (equipment, spells, traits, backstory). All fields are optional — if left blank, the DM generates an adventurer automatically and remembers it for the full session.
+Before a session begins, the player selects a hero from a roster of premade characters stored in the database. Each character comes fully built with name, race, class, background, ability scores, HP, AC, equipment, personality traits, ideals, bonds, flaws, and features.
 
 Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to. A **"Who am I?"** button in the session header lets you ask the DM to describe your character at any time.
 
@@ -101,13 +101,20 @@ Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (g
 
 The session page includes a persistent sidebar with three tabs:
 
-- **Character** — name, race/class/level, background, HP, AC, and all six ability scores with modifiers calculated automatically. Falls back to an "Ask the DM" prompt if no sheet was filled in.
+- **Character** — name, race/class/level, background, HP, AC, and all six ability scores with modifiers calculated automatically.
 - **Combat** — live initiative order sorted by roll, HP bars that shift green → amber → red as combatants take damage, AC and initiative values, active conditions, and a scrollable combat log. Shows a "waiting for initiative roll" state when combat has just started. Auto-switches to this tab when combat begins.
 - **Log** — session stats (message count, DM responses, combat rounds), a D&D 5e quick reference card, and clickable phrase shortcuts that pre-fill the input box.
 
-### 8. Session Journal (End of Session)
+### 8. Session Journal & Save System
 
-When you end a session, the full conversation history is sent to the LLM with a journaling prompt. It generates a narrative entry written in the voice of the player's character — capturing key events, decisions, and outcomes in first-person prose. Each journal entry is saved and can be reviewed at any time.
+Sessions are never lost. When you're done playing, you have two options:
+
+- **Save & Pause** — generates a narrative journal entry in the voice of your character, sets the session to `paused`, and returns you to the home screen. All state is preserved: messages, combat, character context. A "Continue Adventure" button on the home and journal screens picks up exactly where you left off, with a short re-entry narration from the DM to reorient you.
+- **End Campaign** — generates the journal entry and marks the session `completed`. The session becomes read-only and is preserved in your journal archive.
+
+Sessions carry one of three statuses: `active`, `paused`, or `completed`.
+
+Journal entries are written in first-person past tense — evocative prose, not a bullet summary — capturing key events, decisions, encounters, and emotional beats. Each entry is saved and can be reviewed at any time from the journal page.
 
 ---
 
@@ -141,10 +148,22 @@ id, document_id, content, embedding (vector), page, section
 
 ### sessions
 
-One row per play session. Stores session title, status, character context, and the generated journal entry.
+One row per play session. Stores session title, status (`active` | `paused` | `completed`), character context, and the generated journal entry.
 
 ```
 id, user_id, title, created_at, journal_entry, status, character_context
+```
+
+### characters
+
+One row per premade character. Stores the full character sheet including stats, equipment, personality, and traits.
+
+```
+id, name, race, class, background, alignment, level,
+str, dex, con, int, wis, cha,
+max_hp, ac, speed, hit_dice, proficiency_bonus, passive_wisdom,
+personality_traits, ideals, bonds, flaws,
+features_and_traits (jsonb), equipment (jsonb), notes
 ```
 
 ### messages
@@ -173,12 +192,13 @@ updated_at
 app/
  ├── api/
  │   ├── chat/route.ts                # RAG pipeline + combat state updates
+ │   ├── characters/route.ts          # Fetch premade character roster
  │   ├── sessions/route.ts            # Session CRUD + opening narration generation
  │   ├── sessions/[id]/route.ts       # Fetch a single session (character context etc.)
  │   ├── sessions/[id]/messages/route.ts # Fetch messages for a session
  │   ├── combat/[id]/route.ts         # GET combat state; PATCH to submit player initiative
- │   ├── journal/route.ts             # Journal generation
- │   └── journal/[id]/route.ts        # Fetch a single journal entry
+ │   ├── journal/route.ts             # Journal generation (POST); accepts pause flag
+ │   └── journal/[id]/route.ts        # Fetch or update a single journal entry (GET, PATCH)
  ├── journal/
  │   ├── [id]/                        # Single journal entry view
  │   │   ├── components/              # Route-specific UI
@@ -202,7 +222,7 @@ app/
  │   ├── HintPanel.tsx                # Renders [HINTS] as a collapsible "What can I do?" panel
  │   └── StatusCard.tsx               # Renders [STATUS] items as a quest status card
  ├── layout.tsx
- ├── page.tsx                         # Landing / Character Creation
+ ├── page.tsx                         # Landing / Character Selection / Session Resume
  └── page.types.ts                    # Shared types for the entry flow
  lib/
  ├── combat/                          # Modularized Combat Engine
@@ -236,7 +256,7 @@ scripts/
 
 ### Pages
 
-- `/` — Home / character creation / start new session
+- `/` — Home / character selection / resume paused session
 - `/session/[id]` — Active play session (chat UI + character/combat/log sidebar)
 - `/journal` — Browse past session journal entries
 - `/journal/[id]` — Single session journal entry
@@ -247,11 +267,13 @@ scripts/
 - `GET /api/sessions` — List all sessions (for journal page)
 - `GET /api/sessions/[id]` — Fetch a single session including character context
 - `GET /api/sessions/[id]/messages` — Fetch all messages for a session
+- `GET /api/characters` — Fetch the premade character roster
 - `POST /api/chat` — RAG pipeline: embed → retrieve → stream LLM response + update combat state
 - `GET /api/combat/[id]` — Fetch current combat state for a session
 - `PATCH /api/combat/[id]` — Submit player initiative roll; re-sorts combatants and clears awaiting flag
-- `POST /api/journal` — End-of-session journal generation
+- `POST /api/journal` — End-of-session journal generation; accepts `pause: true` to set status to `paused` instead of `completed`
 - `GET /api/journal/[id]` — Fetch a single session with journal entry
+- `PATCH /api/journal/[id]` — Update journal entry text and/or session status
 
 ---
 
@@ -331,6 +353,38 @@ Repeat until combat ends
 
 ---
 
+## Session Resume Flow
+
+```
+Player clicks "Save & Pause"
+        ↓
+POST /api/journal { sessionId, messages, pause: true }
+        ↓
+Journal entry generated from full conversation history
+        ↓
+PATCH /api/journal/[id] { journal_entry, status: "paused" }
+        ↓
+Session status set to "paused" — all state preserved in DB
+        ↓
+Player returns to home screen
+        ↓
+Paused session shown with "Continue Adventure" button
+        ↓
+Player clicks Continue → navigated to /session/[id]
+        ↓
+Session page detects status: "paused" + existing messages
+        ↓
+Opening narration skipped — message history loaded from DB
+        ↓
+One-time re-entry narration generated from journal entry
+        ↓
+Combat state rehydrated if a fight was in progress
+        ↓
+Adventure resumes
+```
+
+---
+
 ## Supabase Setup
 
 Enable the pgvector extension and create the similarity search function:
@@ -372,6 +426,34 @@ create table combat_state (
   log jsonb default '[]'::jsonb,
   awaiting_player_initiative boolean default false,
   updated_at timestamptz default now()
+);
+```
+
+Create the characters table:
+
+```sql
+create table characters (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  race text,
+  class text,
+  background text,
+  alignment text,
+  level int default 1,
+  str int, dex int, con int, int int, wis int, cha int,
+  max_hp int,
+  ac int,
+  speed int,
+  hit_dice text,
+  proficiency_bonus int,
+  passive_wisdom int,
+  personality_traits text,
+  ideals text,
+  bonds text,
+  flaws text,
+  features_and_traits jsonb default '[]'::jsonb,
+  equipment jsonb default '[]'::jsonb,
+  notes text
 );
 ```
 
@@ -446,14 +528,15 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 | 2     | RAG pipeline — embed, retrieve, stream, persist                     | ✅ Complete |
 | 3     | DM logic — combat tracking, dice, NPC state                         | ✅ Complete |
 | 4     | Journal — generation, storage, list + detail views                  | ✅ Complete |
-| 5     | Character creation — sheet UI, context injection                    | ✅ Complete |
+| 5     | Character selection — premade roster, context injection             | ✅ Complete |
 | 6     | Opening narration — immersive session intro                         | ✅ Complete |
 | 7     | Session sidebar — character stats, combat tracker, log              | ✅ Complete |
 | 8     | Player dice rolling — initiative, attacks, checks, saves, damage    | ✅ Complete |
 | 9     | Turn enforcement — monsters resolve fully before player is prompted | ✅ Complete |
 | 10    | Encounter detection — correct monsters spawned per LMoP location    | ✅ Complete |
 | 11    | Structured DM output — status card + hint panel for new players     | ✅ Complete |
-| 12    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
+| 12    | Save & resume — pause sessions, continue where you left off         | ✅ Complete |
+| 13    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const CHAT_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3";
+import {
+  getOllamaBaseUrl,
+  getOllamaChatModel,
+  readOllamaChatContent,
+} from "@/lib/ollama";
 
 function buildJournalPrompt(
   messages: { role: string; content: string }[],
@@ -36,20 +38,17 @@ async function generateJournalEntry(
 ): Promise<string> {
   const prompt = buildJournalPrompt(messages);
 
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+  const res = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: CHAT_MODEL,
+      model: getOllamaChatModel(),
       stream: false,
       messages: [{ role: "user", content: prompt }],
     }),
   });
 
-  if (!res.ok) throw new Error(`Ollama request failed: ${res.statusText}`);
-
-  const data = await res.json();
-  return data.message?.content ?? "";
+  return readOllamaChatContent(res);
 }
 
 async function saveJournalEntry(
