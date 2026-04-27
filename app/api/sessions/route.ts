@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import {
-  getOllamaBaseUrl,
-  getOllamaChatModel,
-  readOllamaChatContent,
-} from "@/lib/ollama";
+  createLlmChatCompletion,
+  getLlmProvider,
+  readLlmChatContent,
+} from "@/lib/llmClient";
 
 const OPENING_SYSTEM_PROMPT = `You are the Dungeon Master for Lost Mine of Phandelver, a D&D 5e adventure.
 
@@ -25,20 +25,14 @@ async function generateOpeningMessage(
     ? `My character: ${characterContext}\n\nBegin the adventure.`
     : "Begin the adventure.";
 
-  const response = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: getOllamaChatModel(),
-      messages: [
-        { role: "system", content: OPENING_SYSTEM_PROMPT },
-        { role: "user", content: userContent },
-      ],
-      stream: false,
-    }),
+  const provider = getLlmProvider();
+  const response = await createLlmChatCompletion({
+    provider,
+    systemPrompt: OPENING_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userContent }],
   });
 
-  return readOllamaChatContent(response);
+  return readLlmChatContent(response, provider);
 }
 
 // POST /api/sessions — create a new session
@@ -68,7 +62,7 @@ export async function POST(req: NextRequest) {
     if (sessionError) throw new Error(sessionError.message);
 
     // 2. Generate the opening DM narration
-    console.log("Calling Ollama at:", getOllamaBaseUrl());
+    console.log("Using LLM provider:", getLlmProvider());
     const openingMessage = await generateOpeningMessage(characterContext);
     console.log("Opening message length:", openingMessage.length);
     console.log("Opening message preview:", openingMessage.slice(0, 120));

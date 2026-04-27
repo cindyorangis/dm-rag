@@ -499,6 +499,13 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBED_MODEL=nomic-embed-text
 OLLAMA_CHAT_MODEL=llama3
+GROQ_API_KEY=your_groq_api_key
+GROQ_BASE_URL=https://api.groq.com/v1
+GROQ_CHAT_MODEL=llama-3.3-70b-versatile
+# Optional override. If omitted:
+# - production uses groq
+# - local development uses ollama
+LLM_PROVIDER=
 ```
 
 ### Local Development

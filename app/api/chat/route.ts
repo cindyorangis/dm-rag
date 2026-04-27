@@ -23,15 +23,17 @@ import { v4 as uuidv4 } from "uuid";
 import type { CombatState, Combatant } from "@/lib/combat/types";
 import { retrieveChunks } from "@/lib/rag";
 import {
-  getOllamaBaseUrl,
-  getOllamaChatModel,
-  readOllamaError,
-} from "@/lib/ollama";
+  createLlmChatStream,
+  getLlmProvider,
+  parseLlmStreamChunk,
+  readLlmError,
+} from "@/lib/llmClient";
 
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
   const conversationHistory = Array.isArray(history) ? history : [];
   const supabase = supabaseAdmin;
+  const llmProvider = getLlmProvider();
 
   // 1. Embed the player message and retrieve relevant chunks
   const chunks = await retrieveChunks(message);
@@ -46,19 +48,15 @@ export async function POST(req: NextRequest) {
   // 4. Build messages array for the LLM
   const messages = [...conversationHistory, { role: "user", content: message }];
 
-  // 5. Call Ollama (streaming)
-  const ollamaRes = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: getOllamaChatModel(),
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-      stream: true,
-    }),
+  // 5. Call provider-backed LLM (streaming)
+  const llmRes = await createLlmChatStream({
+    provider: llmProvider,
+    systemPrompt,
+    messages,
   });
 
-  if (!ollamaRes.ok) {
-    const error = await readOllamaError(ollamaRes);
+  if (!llmRes.ok) {
+    const error = await readLlmError(llmRes, llmProvider);
     return NextResponse.json({ error }, { status: 500 });
   }
 
@@ -68,38 +66,77 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const reader = ollamaRes.body?.getReader();
+      const reader = llmRes.body?.getReader();
       if (!reader) {
         controller.close();
         return;
       }
 
       const decoder = new TextDecoder();
+      let pending = "";
+
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter(Boolean);
+        pending += decoder.decode(value, { stream: true });
+        const lastNewlineIndex = pending.lastIndexOf("\n");
+        if (lastNewlineIndex === -1) {
+          continue;
+        }
 
-        for (const line of lines) {
-          try {
-            const json = JSON.parse(line);
-            if (json.error) {
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({ error: json.error })}\n\n`,
-                ),
-              );
-              controller.close();
-              return;
-            }
-            const token = json.message?.content ?? "";
+        const completeChunk = pending.slice(0, lastNewlineIndex + 1);
+        pending = pending.slice(lastNewlineIndex + 1);
+        const parsedChunk = parseLlmStreamChunk(completeChunk, llmProvider);
+
+        if (parsedChunk.error) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ error: parsedChunk.error })}\n\n`,
+            ),
+          );
+          controller.close();
+          return;
+        }
+
+        for (const token of parsedChunk.tokens) {
+          if (token) {
             fullResponse += token;
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
             );
-          } catch {}
+          }
+        }
+
+        if (parsedChunk.done) {
+          break;
+        }
+      }
+
+      if (pending.trim()) {
+        const parsedRemainder = parseLlmStreamChunk(
+          `${pending}\n`,
+          llmProvider,
+        );
+        if (parsedRemainder.error) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ error: parsedRemainder.error })}\n\n`,
+            ),
+          );
+          controller.close();
+          return;
+        }
+
+        for (const token of parsedRemainder.tokens) {
+          if (token) {
+            fullResponse += token;
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
+            );
+          }
         }
       }
 

@@ -15,6 +15,27 @@ type OllamaErrorResponse = {
   error?: string;
 };
 
+type GroqChatCompletionResponse = {
+  error?: {
+    message?: string;
+  };
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+type OllamaChatResponse = {
+  error?: string;
+  message?: {
+    role?: string;
+    content?: string;
+  };
+  response?: string;
+  content?: string;
+};
+
 const DEFAULT_OLLAMA_BASE_URL =
   process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3.1:8b";
@@ -96,6 +117,50 @@ export async function createLlmChatStream(params: {
   });
 }
 
+export async function createLlmChatCompletion(params: {
+  systemPrompt?: string;
+  messages: LlmMessage[];
+  provider?: LlmProvider;
+  model?: string;
+}) {
+  const provider = params.provider ?? getLlmProvider();
+  const model = params.model ?? getLlmChatModel(provider);
+  const baseUrl = getLlmBaseUrl(provider);
+  const allMessages: LlmMessage[] = params.systemPrompt
+    ? [{ role: "system", content: params.systemPrompt }, ...params.messages]
+    : params.messages;
+
+  if (provider === "groq") {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      throw new Error("Missing GROQ_API_KEY");
+    }
+
+    return fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: allMessages,
+        stream: false,
+      }),
+    });
+  }
+
+  return fetch(`${baseUrl}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: allMessages,
+      stream: false,
+    }),
+  });
+}
+
 export async function readLlmError(
   response: Response,
   provider = getLlmProvider(),
@@ -114,6 +179,50 @@ export async function readLlmError(
   } catch {
     return `${provider} request failed with status ${response.status}`;
   }
+}
+
+export async function readLlmChatContent(
+  response: Response,
+  provider = getLlmProvider(),
+): Promise<string> {
+  if (provider === "groq") {
+    const data = (await response.json()) as GroqChatCompletionResponse;
+
+    if (!response.ok) {
+      throw new Error(
+        data.error?.message ||
+          `Groq request failed with status ${response.status}`,
+      );
+    }
+
+    const content = data.choices?.[0]?.message?.content ?? "";
+    if (!content.trim()) {
+      throw new Error("Groq returned an empty chat response.");
+    }
+
+    return content;
+  }
+
+  const data = (await response.json()) as OllamaChatResponse;
+
+  if (!response.ok) {
+    throw new Error(
+      data.error || `Ollama request failed with status ${response.status}`,
+    );
+  }
+
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  const content = data.message?.content ?? data.response ?? data.content ?? "";
+  if (!content.trim()) {
+    throw new Error(
+      `Ollama returned an empty chat response. Keys: ${Object.keys(data).join(", ") || "none"}`,
+    );
+  }
+
+  return content;
 }
 
 export function parseLlmStreamChunk(

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import {
-  getOllamaBaseUrl,
-  getOllamaChatModel,
-  readOllamaChatContent,
-} from "@/lib/ollama";
+  createLlmChatCompletion,
+  getLlmProvider,
+  readLlmChatContent,
+} from "@/lib/llmClient";
 
 function buildJournalPrompt(
   messages: { role: string; content: string }[],
@@ -37,18 +37,13 @@ async function generateJournalEntry(
   messages: { role: string; content: string }[],
 ): Promise<string> {
   const prompt = buildJournalPrompt(messages);
-
-  const res = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: getOllamaChatModel(),
-      stream: false,
-      messages: [{ role: "user", content: prompt }],
-    }),
+  const provider = getLlmProvider();
+  const res = await createLlmChatCompletion({
+    provider,
+    messages: [{ role: "user", content: prompt }],
   });
 
-  return readOllamaChatContent(res);
+  return readLlmChatContent(res, provider);
 }
 
 async function saveJournalEntry(
