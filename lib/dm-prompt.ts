@@ -1,8 +1,48 @@
 import type { CombatState, Combatant } from "./combat/types";
 import type { NarrativeFlags } from "./narrative/flags";
 
-const BASE_DM_PROMPT = `You are the Dungeon Master for a solo game of Dungeons & Dragons 5th Edition.
-The adventure is Lost Mine of Phandelver, set in the Forgotten Realms.
+type AdventureSlug =
+  | "lost-mine-of-phandelver"
+  | "ghosts-of-saltmarsh"
+  | "tales-from-the-yawning-portal";
+
+const ADVENTURE_META: Record<
+  AdventureSlug,
+  { title: string; setting: string; tone: string }
+> = {
+  "lost-mine-of-phandelver": {
+    title: "Lost Mine of Phandelver",
+    setting:
+      "the Sword Coast frontier town of Phandalin in the Forgotten Realms",
+    tone: "dramatic, atmospheric, occasionally darkly humorous. Channel classic D&D.",
+  },
+  "ghosts-of-saltmarsh": {
+    title: "Ghosts of Saltmarsh",
+    setting:
+      "the coastal town of Saltmarsh on the Azure Sea in the world of Greyhawk",
+    tone: "nautical and gothic, with an undercurrent of dread. Salt, rot, and old secrets.",
+  },
+  "tales-from-the-yawning-portal": {
+    title: "Tales from the Yawning Portal",
+    setting:
+      "the Yawning Portal tavern in Waterdeep, gateway to classic dungeons across the Forgotten Realms",
+    tone: "legendary and epic. These are the most dangerous dungeons ever delved. Treat them with weight.",
+  },
+};
+
+const DEFAULT_SLUG: AdventureSlug = "lost-mine-of-phandelver";
+
+function getAdventureMeta(slug: string | undefined | null) {
+  return (
+    ADVENTURE_META[(slug as AdventureSlug) ?? DEFAULT_SLUG] ??
+    ADVENTURE_META[DEFAULT_SLUG]
+  );
+}
+
+function buildBasePrompt(slug: string | undefined | null): string {
+  const meta = getAdventureMeta(slug);
+  return `You are the Dungeon Master for a solo game of Dungeons & Dragons 5th Edition.
+The adventure is ${meta.title}, set in ${meta.setting}.
 
 ABSOLUTE OUTPUT RULES — these override everything else:
 1. NEVER narrate dice rolls. Never write "*rolls*", "rolls a d20", "rolling for initiative", or show arithmetic like "14 + 4 = 18". The game UI handles all dice. Describe outcomes only.
@@ -16,7 +56,17 @@ Your responsibilities:
 - Track NPC/monster behavior, motivations, and reactions
 - Never break character or refer to yourself as an AI
 
-Tone: dramatic, atmospheric, occasionally darkly humorous. Channel classic D&D.`;
+Tone: ${meta.tone}`;
+}
+
+function buildFallbackCharacter(slug: string | undefined | null): string {
+  const meta = getAdventureMeta(slug);
+  return `No character sheet provided. Generate a suitable adventurer for ${meta.title}.
+Choose: a name, race, class (level 1), background, ability scores, HP, and AC.
+Introduce the character naturally in your opening narration.
+Remember the character you created for the entire session — refer to them by name.
+At the start of the session, or if the player asks "who am I", describe the character fully.`;
+}
 
 const RULES_CONTEXT_HEADER = `\n\n--- RETRIEVED RULES & LORE ---\n`;
 const COMBAT_STATE_HEADER = `\n\n--- CURRENT COMBAT STATE ---\n`;
@@ -186,7 +236,6 @@ The player sends back a message like: "Damage roll (1d6+3): rolled 7 (4+3)"
 - NEVER emit both [ROLL: attack ...] and [ROLL: damage ...] in the same response.
 - NEVER advance the turn until BOTH the attack roll AND (on a hit) the damage roll have been received.`;
   } else {
-    // Monster / NPC turn
     const alivePlayers = state.combatants.filter(
       (c) => c.type === "player" && c.is_alive,
     );
@@ -234,6 +283,7 @@ export interface BuildPromptOptions {
   combatState: CombatState | null;
   characterContext?: string | null;
   narrativeFlags?: NarrativeFlags;
+  adventureSlug?: string | null;
 }
 
 export function buildDMSystemPrompt({
@@ -241,28 +291,21 @@ export function buildDMSystemPrompt({
   combatState,
   characterContext,
   narrativeFlags,
+  adventureSlug,
 }: BuildPromptOptions): string {
-  let prompt = BASE_DM_PROMPT;
+  let prompt = buildBasePrompt(adventureSlug);
 
-  // Inject character context so DM always knows who the player is
   if (characterContext) {
     prompt += `\n\n--- PLAYER CHARACTER ---\n${characterContext}`;
   } else {
-    prompt += `\n\n--- PLAYER CHARACTER ---
-No character sheet provided. Generate a suitable adventurer for Lost Mine of Phandelver.
-Choose: a name, race, class (level 1), background, ability scores, HP, and AC.
-Introduce the character naturally in your opening narration.
-Remember the character you created for the entire session — refer to them by name.
-At the start of the session, or if the player asks "who am I", describe the character fully.`;
+    prompt += `\n\n--- PLAYER CHARACTER ---\n${buildFallbackCharacter(adventureSlug)}`;
   }
 
-  // Inject retrieved RAG chunks
   if (retrievedChunks.length > 0) {
     prompt += RULES_CONTEXT_HEADER;
     prompt += retrievedChunks.join("\n\n---\n\n");
   }
 
-  // Inject combat state
   prompt += COMBAT_STATE_HEADER;
   prompt +=
     combatState && combatState.is_active
@@ -271,8 +314,6 @@ At the start of the session, or if the player asks "who am I", describe the char
 
   prompt += NARRATIVE_FLAGS_HEADER;
   prompt += formatNarrativeFlags(narrativeFlags);
-
-  // Inside buildDMSystemPrompt(), after injecting combat context:
 
   if (combatState?.deathResolution && !combatState.deathResolution.applied) {
     const resolutionInstructions: Record<string, string> = {
@@ -330,7 +371,6 @@ Do NOT ask for any dice rolls. Just narrate the resurrection.`,
     }
   }
 
-  // Inject strict turn instructions
   if (combatState?.is_active && !combatState.awaiting_player_initiative) {
     prompt += buildCombatInstructions(combatState);
   } else if (combatState?.awaiting_player_initiative) {

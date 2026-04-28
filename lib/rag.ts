@@ -1,9 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
-const DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text";
+const DEFAULT_OLLAMA_EMBED_MODEL = "mxbai-embed-large";
 
-// 1. Embed a string using Ollama
 export async function embedText(text: string): Promise<number[]> {
   const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
   const embedModel =
@@ -23,9 +22,9 @@ export async function embedText(text: string): Promise<number[]> {
   return data.embedding as number[];
 }
 
-// 2. Retrieve top-k relevant chunks from Supabase via cosine similarity
 export async function retrieveChunks(
   query: string,
+  adventureSlug: string,
   matchCount = 6,
 ): Promise<{ id: string; content: string; similarity: number }[]> {
   let embedding: number[];
@@ -42,8 +41,9 @@ export async function retrieveChunks(
     throw error;
   }
 
-  const { data, error } = await supabaseAdmin.rpc("match_chunks", {
+  const { data, error } = await supabaseAdmin.rpc("match_chunks_scoped", {
     query_embedding: embedding,
+    adventure_slug: adventureSlug,
     match_count: matchCount,
   });
 

@@ -44,32 +44,37 @@ export async function POST(req: NextRequest) {
   const supabase = supabaseAdmin;
   const llmProvider = getLlmProvider();
 
-  // 1. Embed the player message and retrieve relevant chunks
-  const chunks = await retrieveChunks(message);
-  const retrievedChunks = chunks.map((c: { content: string }) => c.content);
-
-  // 2. Load current combat state from Supabase
-  let combatState = await getCombatState(sessionId);
-
-  // 2b. Load persistent narrative flags
+  // 1. Load session — grab adventure_slug and narrative_flags in one query
   const { data: sessionRow } = await supabase
     .from("sessions")
-    .select("narrative_flags")
+    .select("narrative_flags, adventure_slug, character_context")
     .eq("id", sessionId)
     .single();
-  const narrativeFlags = sanitizeNarrativeFlags(sessionRow?.narrative_flags);
 
-  // 3. Build the DM system prompt with combat state injected
+  const narrativeFlags = sanitizeNarrativeFlags(sessionRow?.narrative_flags);
+  const adventureSlug: string =
+    sessionRow?.adventure_slug ?? "lost-mine-of-phandelver";
+
+  // 2. Embed the player message and retrieve chunks scoped to this adventure
+  const chunks = await retrieveChunks(message, adventureSlug);
+  const retrievedChunks = chunks.map((c: { content: string }) => c.content);
+
+  // 3. Load current combat state from Supabase
+  let combatState = await getCombatState(sessionId);
+
+  // 4. Build the DM system prompt with combat state and adventure context
   const systemPrompt = buildDMSystemPrompt({
     retrievedChunks,
     combatState,
     narrativeFlags,
+    adventureSlug,
+    characterContext: sessionRow?.character_context ?? null,
   });
 
-  // 4. Build messages array for the LLM
+  // 5. Build messages array for the LLM
   const messages = [...conversationHistory, { role: "user", content: message }];
 
-  // 5. Call provider-backed LLM (streaming)
+  // 6. Call provider-backed LLM (streaming)
   const llmRes = await createLlmChatStream({
     provider: llmProvider,
     systemPrompt,
@@ -81,7 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error }, { status: 500 });
   }
 
-  // 6. Stream response back to client, collect full text for post-processing
+  // 7. Stream response back to client, collect full text for post-processing
   const encoder = new TextEncoder();
   let fullResponse = "";
 
@@ -163,23 +168,24 @@ export async function POST(req: NextRequest) {
 
       const dmResponseForState = stripNarrativeFlagOpsBlocks(fullResponse);
 
-      // 7. Post-stream: update combat state based on DM response
+      // 8. Post-stream: update combat state based on DM response
       combatState = await processCombatStateUpdate({
         sessionId,
         playerMessage: message,
         dmResponse: dmResponseForState,
         combatState,
+        characterContext: sessionRow?.character_context ?? null,
         supabase,
       });
 
-      // 8. Persist narrative flags if the DM emitted operations
+      // 9. Persist narrative flags if the DM emitted operations
       await updateNarrativeFlagsFromDmResponse({
         sessionId,
         dmResponse: fullResponse,
         supabase,
       });
 
-      // 9. Persist messages to DB
+      // 10. Persist messages to DB
       await supabase.from("messages").insert([
         { session_id: sessionId, role: "user", content: message },
         {
@@ -189,7 +195,7 @@ export async function POST(req: NextRequest) {
         },
       ]);
 
-      // 10. Signal the frontend whether initiative is needed
+      // 11. Signal the frontend whether initiative is needed
       controller.enqueue(
         encoder.encode(
           `data: ${JSON.stringify({
@@ -247,12 +253,14 @@ async function processCombatStateUpdate({
   playerMessage,
   dmResponse,
   combatState,
+  characterContext,
   supabase,
 }: {
   sessionId: string;
   playerMessage: string;
   dmResponse: string;
   combatState: CombatState | null;
+  characterContext: string | null;
   supabase: SupabaseClient;
 }): Promise<CombatState | null> {
   // ── Mark deathResolution as applied after DM has narrated it ────────────
@@ -262,28 +270,17 @@ async function processCombatStateUpdate({
       deathResolution: { ...combatState.deathResolution, applied: true },
     };
     await upsertCombatState(combatState);
-    return combatState; // skip damage/turn processing for this narration turn
+    return combatState;
   }
 
   // ── Case 1: Combat just started ──────────────────────────────────────────
   if (!combatState?.is_active && detectCombatStart(playerMessage, dmResponse)) {
-    // Load the session to get character_context for the player combatant
-    const { data: session } = await supabase
-      .from("sessions")
-      .select("character_context")
-      .eq("id", sessionId)
-      .single();
+    const playerCombatant = buildPlayerCombatant(characterContext);
 
-    const playerCombatant = buildPlayerCombatant(session?.character_context);
-
-    // Detect which encounter based on message context, fall back to trail ambush
     const encounterKey = detectEncounterKey(playerMessage, dmResponse);
     const monsters = buildEncounterMonstersOnly(encounterKey);
-
-    // Roll initiatives for all NPCs (monsters only — player rolls their own)
     const monstersWithInitiative = rollAllInitiatives(monsters);
 
-    // Player initiative is 0 for now; re-sorted after player rolls
     const combatants: Combatant[] = [
       { ...playerCombatant, initiative: 0 },
       ...monstersWithInitiative,
@@ -340,7 +337,6 @@ async function processCombatStateUpdate({
   if (isPlayerDead(state) && !state.deathResolution) {
     const resolutionType = selectDeathResolution();
 
-    // Reset player to 1 HP
     state.combatants = state.combatants.map((c) =>
       c.type === "player" ? { ...c, hp: 1, currentHp: 1 } : c,
     );
@@ -376,7 +372,6 @@ async function processCombatStateUpdate({
     return state;
   }
 
-  // Advance the turn
   state = advanceTurn(state);
   await upsertCombatState(state);
   return state;
@@ -404,7 +399,6 @@ function buildPlayerCombatant(
     const acMatch = characterContext.match(/AC:\s*(\d+)/);
     if (acMatch) ac = parseInt(acMatch[1]);
 
-    // DEX score → modifier
     const dexMatch = characterContext.match(/DEX\s+(\d+)/i);
     if (dexMatch) dexMod = Math.floor((parseInt(dexMatch[1]) - 10) / 2);
   }

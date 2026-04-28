@@ -25,18 +25,25 @@ Many D&D players face a common barrier: no one to DM. Scheduling a group is hard
 
 ---
 
-## Campaign: Lost Mine of Phandelver
+## Supported Adventures
 
-The initial release is built around Lost Mine of Phandelver — a classic starter adventure set in the Forgotten Realms. The app has full knowledge of this module's locations, NPCs, factions, encounters, and story beats.
+The app supports multiple official D&D adventures. Each adventure has its own knowledge base, opening narration, and DM tone. Only chunks from the active adventure (plus the core rulebooks) are retrieved during play — keeping the DM grounded in the right lore.
 
-The four source documents loaded into the knowledge base are:
+| Adventure                     | Setting                     | Levels | Status         |
+| ----------------------------- | --------------------------- | ------ | -------------- |
+| Lost Mine of Phandelver       | Phandalin, Forgotten Realms | 1–5    | ✅ Available   |
+| Ghosts of Saltmarsh           | Saltmarsh, Greyhawk         | 1–12   | 🔲 Coming soon |
+| Tales from the Yawning Portal | Waterdeep + various         | 1–15   | 🔲 Coming soon |
 
-- Lost Mine of Phandelver — the adventure module
-- Player's Handbook (PHB) — rules, spells, classes, races
-- Dungeon Master's Guide (DMG) — rulings, tables, guidance
-- Monster Manual (MM) — stat blocks and lore for all creatures
+### Source Documents
 
-When you ask a rules question, describe an action, or enter combat, the app retrieves the most relevant passages from these books and uses them to ground its response — ensuring it plays by the actual rules, not hallucinated ones.
+Each adventure draws from its own module plus the three shared core rulebooks:
+
+- **Player's Handbook (PHB)** — rules, spells, classes, races
+- **Dungeon Master's Guide (DMG)** — rulings, tables, guidance
+- **Monster Manual (MM)** — stat blocks and lore for all creatures
+
+When you ask a rules question, describe an action, or enter combat, the app retrieves the most relevant passages from the active adventure module and the core books — ensuring it plays by the actual rules, not hallucinated ones.
 
 ---
 
@@ -44,24 +51,51 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 
 ### 1. Document Ingestion (One-Time Setup)
 
-Each source book is parsed, chunked into ~500 token sections, and converted into vector embeddings via Ollama. These embeddings are stored in a Supabase database using the pgvector extension, enabling semantic search across all four books simultaneously.
+Source books are organized into a two-tier folder structure under `scripts/books/`:
 
-### 2. Character Selection
+```
+scripts/books/
+  core/                              ← PHB, DMG, MM (shared across all adventures)
+  adventures/
+    lost-mine-of-phandelver/         ← adventure slug = folder name
+    ghosts-of-saltmarsh/
+    tales-from-the-yawning-portal/
+```
 
-Before a session begins, the player selects a hero from a roster of premade characters stored in the database. Each character comes fully built with name, race, class, background, ability scores, HP, AC, equipment, personality traits, ideals, bonds, flaws, and features.
+Each PDF is parsed, chunked into ~500 character sections with 100-character overlap, and converted into vector embeddings via Ollama. Chunks are stored in Supabase with `pgvector`, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
+
+Run ingestion once per new book:
+
+```bash
+python scripts/ingest.py
+```
+
+The script skips documents already in the database, so it's safe to re-run after adding new PDFs.
+
+### 2. Adventure & Character Selection
+
+Before a session begins, the player selects an adventure and a hero from a roster of premade characters stored in the database. The chosen `adventure_slug` is persisted to the session row and carried through every subsequent request — routing RAG queries, setting the DM's tone, and determining which encounter stat blocks to spawn in combat.
+
+Each character comes fully built with name, race, class, background, ability scores, HP, AC, equipment, personality traits, ideals, bonds, flaws, and features.
 
 Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to. A **"Who am I?"** button in the session header lets you ask the DM to describe your character at any time.
 
 ### 3. Opening Narration
 
-When a new session is created, the app immediately generates an immersive opening narration — before the player types a single word. The DM sets the scene on the Triboar Trail, establishes the atmosphere, and drops the player directly into the goblin ambush. No "Welcome to the adventure." No prompts. Just the world.
+When a new session is created, the app immediately generates an immersive opening narration — before the player types a single word. Each adventure has its own scene-setting prompt:
+
+- **Lost Mine of Phandelver** — the Triboar Trail, a wagon, goblins springing an ambush
+- **Ghosts of Saltmarsh** — the salty docks, rumours of a haunted clifftop mansion
+- **Tales from the Yawning Portal** — the warm tavern, the great well, a stranger with a map
+
+No "Welcome to the adventure." No prompts. Just the world.
 
 ### 4. RAG Pipeline (Every Message)
 
 When you send a message — whether it's "I attack the goblin" or "What are the rules for grappling?" — the following happens:
 
 - Your message is embedded into a vector using Ollama
-- The top 6 most relevant chunks are retrieved from Supabase via cosine similarity search
+- The top 6 most relevant chunks are retrieved from Supabase via `match_chunks_scoped` — a scoped similarity search that filters to core rulebook chunks plus chunks belonging to the session's adventure
 - Those chunks are injected as context into the DM system prompt
 - The LLM responds in character as your DM, grounded in the retrieved rules
 - The response streams token-by-token to the UI
@@ -85,7 +119,7 @@ A two-pass fallback parser handles legacy messages and cases where the LLM drift
 
 When combat begins, the app transitions into a structured turn-based mode:
 
-- **Encounter detection** identifies which LMoP encounter is starting based on context (Triboar Trail ambush, Cragmaw Hideout, Redbrand alley, Wave Echo Cave, etc.) and spawns the correct monster stat blocks automatically
+- **Encounter detection** identifies which encounter is starting based on context and spawns the correct monster stat blocks automatically
 - **Monster initiatives** are rolled server-side; the **player rolls their own initiative** via an animated dice widget that appears inline in the chat
 - **Combat state** is persisted to Supabase — surviving a refresh or reconnect
 - The **DM system prompt** is rebuilt each turn with full combat context injected: initiative order, HP, AC, conditions, and recent action log
@@ -94,8 +128,6 @@ When combat begins, the app transitions into a structured turn-based mode:
 - **Damage events** are parsed from the DM's narrative and applied to combatant HP
 - **Conditions** (poisoned, prone, grappled, etc.) are tracked per combatant
 - Combat ends when all monsters (or the player) reach 0 HP — the DM narrates the outcome and the session returns to exploration mode
-
-Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, wolves, owlbear, Nezznar the Black Spider, and more).
 
 ### 7. Death Resolution System
 
@@ -144,7 +176,7 @@ Journal entries are written in first-person past tense — evocative prose, not 
 | Frontend   | Next.js (App Router) + TypeScript | App Router, server and client components          |
 | Styling    | Tailwind CSS                      | Dark fantasy / parchment UI theme                 |
 | LLM        | Ollama (Llama 3)                  | Local inference, no API cost                      |
-| Embeddings | Ollama (nomic-embed-text)         | Local embeddings, matches ingestion model         |
+| Embeddings | Ollama (mxbai-embed-large)        | Local embeddings, matches ingestion model         |
 | Vector DB  | Supabase pgvector                 | Cosine similarity via `<=>` operator              |
 | Database   | Supabase (PostgreSQL)             | Sessions, messages, journal entries, combat state |
 | Hosting    | Vercel                            | Free tier, zero-config Next.js deploys            |
@@ -155,22 +187,26 @@ Journal entries are written in first-person past tense — evocative prose, not 
 
 ### documents
 
-Stores metadata for each source book (name, type, version).
+Stores metadata for each source book. The `category` and `adventure_slug` columns are used by the scoped RAG function to filter chunks per session.
+
+```
+id, title, type, category ('core' | 'adventure'), adventure_slug
+```
 
 ### chunks
 
-Each chunk is a ~500 token passage from a source document, stored with its vector embedding. Indexed for fast similarity search with pgvector.
+Each chunk is a ~500 character passage from a source document, stored with its vector embedding. Indexed for fast similarity search with pgvector.
 
 ```
-id, document_id, content, embedding (vector), page, section
+id, document_id, content, embedding (vector), page
 ```
 
 ### sessions
 
-One row per play session. Stores session title, status (`active` | `paused` | `completed`), character context, and the generated journal entry.
+One row per play session. Stores session title, status, character context, the active adventure slug, and the generated journal entry.
 
 ```
-id, user_id, title, created_at, journal_entry, status, character_context
+id, user_id, title, created_at, journal_entry, status, character_context, adventure_slug, narrative_flags
 ```
 
 ### characters
@@ -250,13 +286,13 @@ app/
  │   ├── HintPanel.tsx                # Renders [HINTS] as a collapsible "What can I do?" panel
  │   └── StatusCard.tsx               # Renders [STATUS] items as a quest status card
  ├── layout.tsx
- ├── page.tsx                         # Landing / Character Selection / Session Resume
+ ├── page.tsx                         # Landing / Adventure + Character Selection / Session Resume
  └── page.types.ts                    # Shared types for the entry flow
  lib/
  ├── combat/                          # Modularized Combat Engine
  │   ├── detector.ts                  # detectCombatStart(), parseDamageFromNarrative()
  │   ├── dice.ts                      # roll(), rollAttack(), rollDamage(), rollInitiative()
- │   ├── encounters.ts                # LMoP monster stat blocks, encounter definitions,
+ │   ├── encounters.ts                # Monster stat blocks, encounter definitions,
  |   |                                # detectEncounterKey(), buildEncounterMonstersOnly()
  │   ├── engine.ts                    # Pure state machine: advanceTurn, applyDamage,
  |   |                                # isPlayerDead(), selectDeathResolution()
@@ -264,21 +300,25 @@ app/
  │   └── types.ts                     # Combatant, CombatState, CombatLogEntry,
  |                                    # DeathResolutionType types
  ├── character.ts                     # Character sheet utilities
- ├── dm-prompt.ts                     # DM system prompt builder — injects combat state,
- |                                    # character context, strict turn instructions,
+ ├── dm-prompt.ts                     # DM system prompt builder — adventure-aware title,
+ |                                    # setting, and tone via ADVENTURE_META; injects combat
+ |                                    # state, character context, strict turn instructions,
  |                                    # death resolution narrative scripts,
  |                                    # and structured [STATUS]/[HINTS] output format
  ├── parse-dm-response.ts             # parseDMResponse() / parseDMResponsePartial() —
  |                                    # splits raw DM output into narrative, statusItems,
  |                                    # and hints; structured parser with freeform fallback
- ├── rag.ts                           # embedText() + retrieveChunks()
+ ├── rag.ts                           # embedText() + retrieveChunks(query, adventureSlug) —
+ |                                    # scoped to core rulebooks + active adventure chunks
  └── supabase.ts                      # Supabase client (browser + admin)
  hooks/
  └── useChat.ts                       # Chat state, streaming, initiative flag
                                       # pendingRolls parsed from DM [ROLL:] tags,
                                       # parsedDM updated live as stream arrives
 scripts/
- └── ingest.ts                        # One-time document ingestion pipeline
+ └── ingest.py                        # Document ingestion pipeline — processes core/ and
+                                      # adventures/ subdirectories, tags each chunk with
+                                      # category and adventure_slug for scoped RAG retrieval
 ```
 
 ---
@@ -287,19 +327,19 @@ scripts/
 
 ### Pages
 
-- `/` — Home / character selection / resume paused session
+- `/` — Home / adventure + character selection / resume paused session
 - `/session/[id]` — Active play session (chat UI + character/combat/log sidebar)
 - `/journal` — Browse past session journal entries
 - `/journal/[id]` — Single session journal entry
 
 ### API Routes
 
-- `POST /api/sessions` — Create a new session, generate and persist the opening narration
+- `POST /api/sessions` — Create a new session (accepts `adventureSlug` + `characterContext`), generate and persist the opening narration
 - `GET /api/sessions` — List all sessions (for journal page)
-- `GET /api/sessions/[id]` — Fetch a single session including character context
+- `GET /api/sessions/[id]` — Fetch a single session including character context and adventure slug
 - `GET /api/sessions/[id]/messages` — Fetch all messages for a session
 - `GET /api/characters` — Fetch the premade character roster
-- `POST /api/chat` — RAG pipeline: embed → retrieve → stream LLM response + update combat state
+- `POST /api/chat` — RAG pipeline: embed → scoped retrieve → stream LLM response + update combat state
 - `GET /api/combat/[id]` — Fetch current combat state for a session
 - `PATCH /api/combat/[id]` — Submit player initiative roll; re-sorts combatants and clears awaiting flag
 - `POST /api/journal` — End-of-session journal generation; accepts `pause: true` to set status to `paused` instead of `completed`
@@ -460,13 +500,25 @@ Adventure resumes
 
 ## Supabase Setup
 
-Enable the pgvector extension and create the similarity search function:
+Enable the pgvector extension:
 
 ```sql
 create extension if not exists vector;
+```
 
-create or replace function match_chunks(
+Add `category` and `adventure_slug` columns to the `documents` table:
+
+```sql
+alter table documents add column if not exists category text default 'core';
+alter table documents add column if not exists adventure_slug text;
+```
+
+Create the scoped similarity search function (replaces the original `match_chunks`):
+
+```sql
+create or replace function match_chunks_scoped(
   query_embedding vector,
+  adventure_slug text,
   match_count int default 6
 )
 returns table (
@@ -477,11 +529,14 @@ returns table (
 language sql stable
 as $$
   select
-    id,
-    content,
-    1 - (embedding <=> query_embedding) as similarity
-  from chunks
-  order by embedding <=> query_embedding
+    c.id,
+    c.content,
+    1 - (c.embedding <=> query_embedding) as similarity
+  from chunks c
+  join documents d on d.id = c.document_id
+  where d.category = 'core'
+     or d.adventure_slug = adventure_slug
+  order by c.embedding <=> query_embedding
   limit match_count;
 $$;
 ```
@@ -530,10 +585,12 @@ create table characters (
 );
 ```
 
-Add the character context column to sessions:
+Add columns to the sessions table:
 
 ```sql
 alter table sessions add column if not exists character_context text;
+alter table sessions add column if not exists adventure_slug text default 'lost-mine-of-phandelver';
+alter table sessions add column if not exists narrative_flags jsonb default '{}'::jsonb;
 ```
 
 > **Note:** If you created the `combat_state` table before the initiative roll feature was added, run this migration:
@@ -550,6 +607,7 @@ alter table sessions add column if not exists character_context text;
 ### Prerequisites
 
 - Node.js 18+
+- Python 3.9+
 - Ollama installed and running locally
 - Supabase account (free)
 - Vercel account for deployment (free)
@@ -590,13 +648,25 @@ npm run dev
 
 ### Document Ingestion
 
-Place your source PDFs in `/scripts/books/` and run:
+Organise your PDFs under `scripts/books/` following the folder convention:
+
+```
+scripts/books/
+  core/                              ← PHB, DMG, MM
+  adventures/
+    lost-mine-of-phandelver/
+    ghosts-of-saltmarsh/
+    tales-from-the-yawning-portal/
+```
+
+The folder name under `adventures/` becomes the `adventure_slug` stored in the database and must match the slug used when creating sessions. Then run:
 
 ```bash
+pip install ollama supabase pypdf
 python scripts/ingest.py
 ```
 
-This only needs to be run once. Chunks and embeddings are persisted in Supabase.
+The script is idempotent — it checks for existing document titles and skips anything already ingested, so it's safe to re-run after adding new PDFs.
 
 ---
 
@@ -617,7 +687,8 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 | 11    | Structured DM output — status card + hint panel for new players     | ✅ Complete |
 | 12    | Save & resume — pause sessions, continue where you left off         | ✅ Complete |
 | 13    | Death resolution — 0 HP as narrative pivot, not game over           | ✅ Complete |
-| 14    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
+| 14    | Multi-adventure support — scoped RAG, per-adventure DM tone         | ✅ Complete |
+| 15    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 
