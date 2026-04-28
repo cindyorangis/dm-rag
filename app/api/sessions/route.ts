@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
         title,
         status: "active",
         character_context: characterContext ?? null,
+        narrative_flags: {},
       })
       .select("id")
       .single();
@@ -90,7 +91,7 @@ export async function GET() {
   try {
     const { data, error } = await supabaseAdmin
       .from("sessions")
-      .select("id, title, created_at, status, journal_entry")
+      .select("id, title, created_at, status, journal_entry, narrative_flags")
       .order("created_at", { ascending: false });
 
     if (error) throw new Error(error.message);

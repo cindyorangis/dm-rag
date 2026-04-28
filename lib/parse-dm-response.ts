@@ -69,6 +69,9 @@ function parseHints(block: string): HintItem[] {
 
 function stripTagRemnants(text: string): string {
   return text
+    .replace(/\[FLAG_OPS\][\s\S]*?\[\/FLAG_OPS\]/gi, "") // complete FLAG_OPS blocks
+    .replace(/\[FLAG_OPS\][\s\S]*$/i, "") // FLAG_OPS block with no closing tag
+    .replace(/\[\/?FLAG_OPS\]/gi, "") // any stray FLAG_OPS tags
     .replace(/\[HINTS\][\s\S]*$/i, "") // HINTS block with no closing tag
     .replace(/\[STATUS\][\s\S]*$/i, "") // STATUS block with no closing tag
     .replace(/\[\/?(?:STATUS|HINTS)\]/gi, "") // any stray open/close tags

@@ -1,4 +1,5 @@
 import type { CombatState, Combatant } from "./combat/types";
+import type { NarrativeFlags } from "./narrative/flags";
 
 const BASE_DM_PROMPT = `You are the Dungeon Master for a solo game of Dungeons & Dragons 5th Edition.
 The adventure is Lost Mine of Phandelver, set in the Forgotten Realms.
@@ -19,6 +20,7 @@ Tone: dramatic, atmospheric, occasionally darkly humorous. Channel classic D&D.`
 
 const RULES_CONTEXT_HEADER = `\n\n--- RETRIEVED RULES & LORE ---\n`;
 const COMBAT_STATE_HEADER = `\n\n--- CURRENT COMBAT STATE ---\n`;
+const NARRATIVE_FLAGS_HEADER = `\n\n--- NARRATIVE FLAGS ---\n`;
 
 function formatCombatant(c: Combatant, isCurrent: boolean): string {
   const marker = isCurrent ? "▶ " : "  ";
@@ -67,6 +69,13 @@ You push open the heavy oak door of the Stonehill Inn. The common room is warm a
 END EXAMPLE
 
 Your response must end with [STATUS]...[/STATUS] followed immediately by [HINTS]...[/HINTS]. Never omit either block.
+
+When the player makes a meaningful choice with long-term consequences, append a hidden [FLAG_OPS] JSON block AFTER [/HINTS].
+- Use lowercase snake_case keys only.
+- Allowed operations:
+  {"set":{"spared_goblin":true},"inc":{"redbrand_hostility":1},"unset":["temporary_flag"]}
+- The [FLAG_OPS] block must contain valid JSON and no prose.
+- Never mention [FLAG_OPS] in narrative text.
 `;
 
 function formatCombatState(state: CombatState): string {
@@ -92,11 +101,28 @@ function formatCombatState(state: CombatState): string {
     });
   }
 
+  if (state.deathResolution?.lingeringEffect) {
+    lines.push(
+      ``,
+      `LINGERING EFFECT: ${state.deathResolution.lingeringEffect}`,
+    );
+  }
+
   return lines.join("\n");
 }
 
 function formatNoCombat(): string {
   return "No combat active. The player is exploring or roleplaying.";
+}
+
+function formatNarrativeFlags(flags: NarrativeFlags | undefined): string {
+  if (!flags || Object.keys(flags).length === 0) {
+    return "None recorded yet.";
+  }
+
+  return Object.entries(flags)
+    .map(([key, value]) => `${key}: ${String(value)}`)
+    .join("\n");
 }
 
 function buildCombatInstructions(state: CombatState): string {
@@ -207,12 +233,14 @@ export interface BuildPromptOptions {
   retrievedChunks: string[];
   combatState: CombatState | null;
   characterContext?: string | null;
+  narrativeFlags?: NarrativeFlags;
 }
 
 export function buildDMSystemPrompt({
   retrievedChunks,
   combatState,
   characterContext,
+  narrativeFlags,
 }: BuildPromptOptions): string {
   let prompt = BASE_DM_PROMPT;
 
@@ -240,6 +268,9 @@ At the start of the session, or if the player asks "who am I", describe the char
     combatState && combatState.is_active
       ? formatCombatState(combatState)
       : formatNoCombat();
+
+  prompt += NARRATIVE_FLAGS_HEADER;
+  prompt += formatNarrativeFlags(narrativeFlags);
 
   // Inside buildDMSystemPrompt(), after injecting combat context:
 
@@ -287,7 +318,7 @@ The player awakens at 1 HP near where they fell, but marked by death itself.
 Narrate this revival with weight — the priest is solemn, warns of a "Death Curse":
 until the player completes a specific task (defeat the goblin boss, recover a stolen relic, etc.),
 they carry a lingering weakness: -2 to all d20 rolls.
-Apply the condition "Death Curse: -2 to all rolls" to the player combatant.
+Treat this as an ongoing penalty tracked in death resolution metadata, not as a standard D&D condition.
 The priest gives one cryptic instruction before departing. 
 Do NOT ask for any dice rolls. Just narrate the resurrection.`,
     };

@@ -59,5 +59,7 @@ export interface CombatState {
   deathResolution?: {
     type: DeathResolutionType;
     applied: boolean; // true once the DM has narrated the scene
+    lingeringEffect?: string;
+    d20RollModifier?: number;
   };
 }

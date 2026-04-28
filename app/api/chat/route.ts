@@ -31,6 +31,12 @@ import {
   parseLlmStreamChunk,
   readLlmError,
 } from "@/lib/llmClient";
+import {
+  applyNarrativeFlagOps,
+  parseNarrativeFlagOpsFromText,
+  sanitizeNarrativeFlags,
+  stripNarrativeFlagOpsBlocks,
+} from "@/lib/narrative/flags";
 
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
@@ -45,8 +51,20 @@ export async function POST(req: NextRequest) {
   // 2. Load current combat state from Supabase
   let combatState = await getCombatState(sessionId);
 
+  // 2b. Load persistent narrative flags
+  const { data: sessionRow } = await supabase
+    .from("sessions")
+    .select("narrative_flags")
+    .eq("id", sessionId)
+    .single();
+  const narrativeFlags = sanitizeNarrativeFlags(sessionRow?.narrative_flags);
+
   // 3. Build the DM system prompt with combat state injected
-  const systemPrompt = buildDMSystemPrompt({ retrievedChunks, combatState });
+  const systemPrompt = buildDMSystemPrompt({
+    retrievedChunks,
+    combatState,
+    narrativeFlags,
+  });
 
   // 4. Build messages array for the LLM
   const messages = [...conversationHistory, { role: "user", content: message }];
@@ -143,22 +161,35 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const dmResponseForState = stripNarrativeFlagOpsBlocks(fullResponse);
+
       // 7. Post-stream: update combat state based on DM response
       combatState = await processCombatStateUpdate({
         sessionId,
         playerMessage: message,
-        dmResponse: fullResponse,
+        dmResponse: dmResponseForState,
         combatState,
         supabase,
       });
 
-      // 8. Persist messages to DB
+      // 8. Persist narrative flags if the DM emitted operations
+      await updateNarrativeFlagsFromDmResponse({
+        sessionId,
+        dmResponse: fullResponse,
+        supabase,
+      });
+
+      // 9. Persist messages to DB
       await supabase.from("messages").insert([
         { session_id: sessionId, role: "user", content: message },
-        { session_id: sessionId, role: "assistant", content: fullResponse },
+        {
+          session_id: sessionId,
+          role: "assistant",
+          content: dmResponseForState,
+        },
       ]);
 
-      // 9. Signal the frontend whether initiative is needed
+      // 10. Signal the frontend whether initiative is needed
       controller.enqueue(
         encoder.encode(
           `data: ${JSON.stringify({
@@ -178,6 +209,33 @@ export async function POST(req: NextRequest) {
       "Cache-Control": "no-cache",
     },
   });
+}
+
+async function updateNarrativeFlagsFromDmResponse({
+  sessionId,
+  dmResponse,
+  supabase,
+}: {
+  sessionId: string;
+  dmResponse: string;
+  supabase: SupabaseClient;
+}) {
+  const ops = parseNarrativeFlagOpsFromText(dmResponse);
+  if (!ops) return;
+
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("narrative_flags")
+    .eq("id", sessionId)
+    .single();
+
+  const current = sanitizeNarrativeFlags(session?.narrative_flags);
+  const nextFlags = applyNarrativeFlagOps(current, ops);
+
+  await supabase
+    .from("sessions")
+    .update({ narrative_flags: nextFlags })
+    .eq("id", sessionId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -287,24 +345,14 @@ async function processCombatStateUpdate({
       c.type === "player" ? { ...c, hp: 1, currentHp: 1 } : c,
     );
 
-    // Attach the death curse condition if that resolution was chosen
-    if (resolutionType === "corpse_run") {
-      state.combatants = state.combatants.map((c) =>
-        c.type === "player"
-          ? {
-              ...c,
-              conditions: [
-                ...(c.conditions ?? []),
-                "Death Curse: -2 to all rolls",
-              ],
-            }
-          : c,
-      );
-    }
-
     state.deathResolution = {
       type: resolutionType,
       applied: false,
+      lingeringEffect:
+        resolutionType === "corpse_run"
+          ? "Marked by death: -2 to all d20 rolls until the corpse-run objective is completed."
+          : undefined,
+      d20RollModifier: resolutionType === "corpse_run" ? -2 : undefined,
     };
 
     state = appendLog(state, {

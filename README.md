@@ -97,7 +97,26 @@ When combat begins, the app transitions into a structured turn-based mode:
 
 Monster stat blocks for all Lost Mine of Phandelver encounters are pre-loaded (goblins, bugbears, the Goblin Boss, wolves, owlbear, Nezznar the Black Spider, and more).
 
-### 7. Session Sidebar
+### 7. Death Resolution System
+
+Reaching 0 HP never ends the session. Instead, the app treats player death as a **narrative pivot point** — the story continues, but the situation changes dramatically. When the player drops to 0 HP, a resolution type is selected at random from four possible outcomes, each of which is narrated by the DM as a seamless story beat.
+
+**Resolution Types:**
+
+- **Capture** — The enemies choose not to kill the player. They stabilize them (1 HP), strip their weapons and gear, and drag them to a holding cell. The player awakens imprisoned; their task is to escape.
+- **Mysterious Benefactor** — A cloaked figure arrives at the last moment, drives off the attackers, and stabilizes the player (1 HP). Their motives are unclear. This NPC becomes a story thread.
+- **The Pact** — At the threshold of death, the player experiences a vision. A powerful entity — a deity, archfey, or devil — offers a second chance in exchange for a future, unspecified favor. The player awakens at 1 HP bearing a faint mark. A new quest thread begins.
+- **Corpse Run** — A traveling priest discovers the body and performs a minor resurrection, reviving the player at 1 HP. The player is marked by death: a **Death Curse** condition (-2 to all d20 rolls) is applied and persists until they complete a specific task.
+
+**How it works under the hood:**
+
+When `applyDamage` brings the player to 0 HP, `isPlayerDead()` fires in `processCombatStateUpdate`. A resolution type is selected by `selectDeathResolution()`, the player's HP is immediately reset to 1 in the combatants array, and a `deathResolution: { type, applied: false }` object is written to `combat_state` in Supabase. On the `corpse_run` path, the Death Curse condition is also appended to the player's conditions array at this moment.
+
+On the next chat turn, `buildDMSystemPrompt` detects the unresolved death (`applied: false`) and injects a detailed resolution script into the system prompt — instructing the DM exactly how to narrate the scene for that resolution type. The DM narrates the scene as pure story without prompting for dice rolls. After that response is processed, `applied` is set to `true` and normal combat logic resumes.
+
+The resolution is stored in `combat_state.combatants` (JSONB), so it survives page refreshes and session resumes correctly.
+
+### 8. Session Sidebar
 
 The session page includes a persistent sidebar with three tabs:
 
@@ -105,7 +124,7 @@ The session page includes a persistent sidebar with three tabs:
 - **Combat** — live initiative order sorted by roll, HP bars that shift green → amber → red as combatants take damage, AC and initiative values, active conditions, and a scrollable combat log. Shows a "waiting for initiative roll" state when combat has just started. Auto-switches to this tab when combat begins.
 - **Log** — session stats (message count, DM responses, combat rounds), a D&D 5e quick reference card, and clickable phrase shortcuts that pre-fill the input box.
 
-### 8. Session Journal & Save System
+### 9. Session Journal & Save System
 
 Sessions are never lost. When you're done playing, you have two options:
 
@@ -176,12 +195,21 @@ id, session_id, role (user|assistant), content, created_at
 
 ### combat_state
 
-One row per active session. Persists the full combat snapshot — initiative order, HP, conditions, turn index, round number, action log, and whether the player still needs to roll their initiative.
+One row per active session. Persists the full combat snapshot — initiative order, HP, conditions, turn index, round number, action log, whether the player still needs to roll their initiative, and the current death resolution (if any).
 
 ```
 id, session_id, is_active, round, current_turn_index,
 combatants (jsonb), log (jsonb), awaiting_player_initiative (boolean),
 updated_at
+```
+
+The `combatants` JSONB array includes a `deathResolution` field on the combat state object when active:
+
+```ts
+deathResolution?: {
+  type: 'capture' | 'benefactor' | 'pact' | 'corpse_run';
+  applied: boolean;
+}
 ```
 
 ---
@@ -191,7 +219,7 @@ updated_at
 ```
 app/
  ├── api/
- │   ├── chat/route.ts                # RAG pipeline + combat state updates
+ │   ├── chat/route.ts                # RAG pipeline + combat state updates + death resolution
  │   ├── characters/route.ts          # Fetch premade character roster
  │   ├── sessions/route.ts            # Session CRUD + opening narration generation
  │   ├── sessions/[id]/route.ts       # Fetch a single session (character context etc.)
@@ -230,12 +258,15 @@ app/
  │   ├── dice.ts                      # roll(), rollAttack(), rollDamage(), rollInitiative()
  │   ├── encounters.ts                # LMoP monster stat blocks, encounter definitions,
  |   |                                # detectEncounterKey(), buildEncounterMonstersOnly()
- │   ├── engine.ts                    # Pure state machine: advanceTurn, applyDamage, etc.
+ │   ├── engine.ts                    # Pure state machine: advanceTurn, applyDamage,
+ |   |                                # isPlayerDead(), selectDeathResolution()
  │   ├── repository.ts                # getCombatState(), upsertCombatState()
- │   └── types.ts                     # Combatant, CombatState, CombatLogEntry types
+ │   └── types.ts                     # Combatant, CombatState, CombatLogEntry,
+ |                                    # DeathResolutionType types
  ├── character.ts                     # Character sheet utilities
  ├── dm-prompt.ts                     # DM system prompt builder — injects combat state,
  |                                    # character context, strict turn instructions,
+ |                                    # death resolution narrative scripts,
  |                                    # and structured [STATUS]/[HINTS] output format
  ├── parse-dm-response.ts             # parseDMResponse() / parseDMResponsePartial() —
  |                                    # splits raw DM output into narrative, statusItems,
@@ -348,7 +379,49 @@ DM prompt instructs: resolve monster action fully, do NOT prompt player
 DM narrates attack, rolls dice itself, applies damage
 Chains through all monster turns until player's turn comes around
         ↓
+── Player reaches 0 HP ────────────────────────────────────
+isPlayerDead() fires in processCombatStateUpdate
+selectDeathResolution() picks one of four outcomes at random
+Player HP reset to 1; Death Curse condition applied if corpse_run
+deathResolution: { type, applied: false } written to combat_state
+        ↓
+Next DM turn: buildDMSystemPrompt injects resolution narrative script
+DM narrates the scene (capture / rescue / vision / resurrection)
+No dice rolls prompted — pure story beat
+        ↓
+applied set to true; normal combat loop resumes
+        ↓
 Repeat until combat ends
+```
+
+---
+
+## Death Resolution Flow
+
+```
+applyDamage() brings player to 0 HP
+        ↓
+isPlayerDead(state) returns true
+        ↓
+selectDeathResolution() returns one of:
+  'capture' | 'benefactor' | 'pact' | 'corpse_run'
+        ↓
+Player HP reset to 1 in combatants array
+If 'corpse_run': "Death Curse: -2 to all rolls" added to conditions
+        ↓
+state.deathResolution = { type, applied: false }
+upsertCombatState() persists to Supabase
+        ↓
+── Next chat turn ─────────────────────────────────────────
+buildDMSystemPrompt detects deathResolution.applied === false
+Injects resolution-specific narrative instructions into system prompt
+DM narrates the scene; no roll widgets, no turn advancement
+        ↓
+processCombatStateUpdate detects applied === false at turn start
+Sets applied = true, upsertCombatState()
+Returns early — skips damage parsing and turn advance for this turn
+        ↓
+Adventure continues from new narrative position
 ```
 
 ---
@@ -543,7 +616,8 @@ This only needs to be run once. Chunks and embeddings are persisted in Supabase.
 | 10    | Encounter detection — correct monsters spawned per LMoP location    | ✅ Complete |
 | 11    | Structured DM output — status card + hint panel for new players     | ✅ Complete |
 | 12    | Save & resume — pause sessions, continue where you left off         | ✅ Complete |
-| 13    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
+| 13    | Death resolution — 0 HP as narrative pivot, not game over           | ✅ Complete |
+| 14    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 
