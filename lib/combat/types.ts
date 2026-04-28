@@ -16,6 +16,12 @@ export type Condition =
   | "stunned"
   | "unconscious";
 
+export type DeathResolutionType =
+  | "capture"
+  | "benefactor"
+  | "pact"
+  | "corpse_run";
+
 export interface Combatant {
   id: string;
   name: string;
@@ -50,4 +56,8 @@ export interface CombatState {
   // The frontend shows a dice roll prompt; once submitted, the backend sorts
   // combatants and clears this flag.
   awaiting_player_initiative?: boolean;
+  deathResolution?: {
+    type: DeathResolutionType;
+    applied: boolean; // true once the DM has narrated the scene
+  };
 }

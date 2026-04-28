@@ -1,10 +1,10 @@
-import { v4 as uuidv4 } from "uuid";
 import { rollInitiative } from "./dice";
 import type {
   Combatant,
   CombatState,
   CombatLogEntry,
   Condition,
+  DeathResolutionType,
 } from "./types";
 
 // Sort combatants by initiative descending; ties broken by initiative_mod
@@ -154,4 +154,20 @@ export function isCombatOver(state: CombatState): {
 
 export function endCombat(state: CombatState): CombatState {
   return { ...state, is_active: false };
+}
+
+export function isPlayerDead(state: CombatState): boolean {
+  return state.combatants.some(
+    (c) => c.type === "player" && c.is_alive === false,
+  );
+}
+
+export function selectDeathResolution(): DeathResolutionType {
+  const options: DeathResolutionType[] = [
+    "capture",
+    "benefactor",
+    "pact",
+    "corpse_run",
+  ];
+  return options[Math.floor(Math.random() * options.length)];
 }

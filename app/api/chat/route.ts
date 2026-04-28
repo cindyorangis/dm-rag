@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { CombatState, Combatant } from "@/lib/combat/types";
+import type { DeathResolutionType } from "@/lib/combat/types";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildDMSystemPrompt } from "@/lib/dm-prompt";
 import { getCombatState, upsertCombatState } from "@/lib/combat/repository";
@@ -14,13 +16,14 @@ import {
   appendLog,
   endCombat,
   rollAllInitiatives,
+  isPlayerDead,
+  selectDeathResolution,
 } from "@/lib/combat/engine";
 import {
   detectEncounterKey,
   buildEncounterMonstersOnly,
 } from "@/lib/combat/encounters";
 import { v4 as uuidv4 } from "uuid";
-import type { CombatState, Combatant } from "@/lib/combat/types";
 import { retrieveChunks } from "@/lib/rag";
 import {
   createLlmChatStream,
@@ -194,6 +197,16 @@ async function processCombatStateUpdate({
   combatState: CombatState | null;
   supabase: SupabaseClient;
 }): Promise<CombatState | null> {
+  // ── Mark deathResolution as applied after DM has narrated it ────────────
+  if (combatState?.deathResolution && !combatState.deathResolution.applied) {
+    combatState = {
+      ...combatState,
+      deathResolution: { ...combatState.deathResolution, applied: true },
+    };
+    await upsertCombatState(combatState);
+    return combatState; // skip damage/turn processing for this narration turn
+  }
+
   // ── Case 1: Combat just started ──────────────────────────────────────────
   if (!combatState?.is_active && detectCombatStart(playerMessage, dmResponse)) {
     // Load the session to get character_context for the player combatant
@@ -264,6 +277,42 @@ async function processCombatStateUpdate({
         description: `${target.name} took ${event.amount} damage (${target.hp - event.amount}/${target.max_hp} HP)`,
       });
     }
+  }
+
+  if (isPlayerDead(state) && !state.deathResolution) {
+    const resolutionType = selectDeathResolution();
+
+    // Reset player to 1 HP
+    state.combatants = state.combatants.map((c) =>
+      c.type === "player" ? { ...c, hp: 1, currentHp: 1 } : c,
+    );
+
+    // Attach the death curse condition if that resolution was chosen
+    if (resolutionType === "corpse_run") {
+      state.combatants = state.combatants.map((c) =>
+        c.type === "player"
+          ? {
+              ...c,
+              conditions: [
+                ...(c.conditions ?? []),
+                "Death Curse: -2 to all rolls",
+              ],
+            }
+          : c,
+      );
+    }
+
+    state.deathResolution = {
+      type: resolutionType,
+      applied: false,
+    };
+
+    state = appendLog(state, {
+      round: state.round,
+      turn: state.current_turn_index,
+      actor: "DM",
+      description: `Player fell to 0 HP. Death resolution: ${resolutionType}`,
+    });
   }
 
   // ── Case 3: Combat ended ─────────────────────────────────────────────────
