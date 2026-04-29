@@ -44,3 +44,5 @@ package-lock.json
 
 scripts/books/*
 scripts/character_sheets/*
+
+scripts/__pycache__/*

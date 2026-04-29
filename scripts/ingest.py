@@ -13,16 +13,23 @@ if env_path.exists():
 
 import ollama
 from supabase import create_client
-import pypdf
+import fitz
 
-from dnd_splitters import SplitterFactory, Document
+from dnd_splitters import (
+    SplitterFactory,
+    Document,
+    is_junk_page,
+    clean_pdf_text,
+    build_boilerplate_blacklist,
+    remove_boilerplate,
+)
 
 # ── Config ─────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["NEXT_PUBLIC_SUPABASE_URL"]
 SUPABASE_KEY = os.environ["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]
 BOOKS_DIR = Path(__file__).parent / "books"
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 150
 EMBED_MODEL = "mxbai-embed-large"
 
 # ── Clients ────────────────────────────────────────────────────────────────
@@ -37,36 +44,106 @@ prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
+    title = pdf_path.name
+    if document_already_ingested(title):
+        print(f"  ⚠️  {title} already ingested, skipping.")
+        return
+
+    print(f"  Processing: {title} ({category} / {adventure_slug or 'N/A'})")
+
+    # Extract all pages first
+    pages = extract_text_from_pdf(pdf_path)
+
+    # Build a blacklist of repeating headers/footers/sidebars
+    # before any chunking happens
+    boilerplate = build_boilerplate_blacklist(pages, min_occurrences=4)
+    if boilerplate:
+        print(f"     → Stripping {len(boilerplate)} boilerplate fragments")
+        for sample in list(boilerplate)[:3]:  # log a few for visibility
+            print(f"       e.g. {repr(sample[:60])}")
+
+    # Create document record
+    doc_result = (
+        supabase.table("documents")
+        .insert(
+            {
+                "title": title,
+                "type": "rulebook",
+                "category": category,
+                "adventure_slug": adventure_slug,
+            }
+        )
+        .execute()
+    )
+    doc_id = doc_result.data[0]["id"]
+
+    # Chunk with boilerplate removed
+    all_docs: list[Document] = []
+    for page_num, page_text in pages:
+        # Remove repeating fragments first, then clean, then check junk
+        page_text = remove_boilerplate(page_text, boilerplate)
+        page_text = clean_pdf_text(page_text)
+
+        if is_junk_page(page_text) or len(page_text.strip()) < 50:
+            continue
+
+        all_docs.extend(chunk_page(page_num, page_text, source=title))
+
+    print(f"     → {len(pages)} pages → {len(all_docs)} chunks")
+
+    # Embed and insert
+    inserted = 0
+    for i, doc in enumerate(all_docs):
+        try:
+            embedding = get_embedding(doc.page_content)
+            supabase.table("chunks").insert(
+                {
+                    "document_id": doc_id,
+                    "content": doc.page_content,
+                    "embedding": embedding,
+                    "page": doc.metadata.get("page"),
+                }
+            ).execute()
+            inserted += 1
+        except Exception as e:
+            print(f"\n  ❌ Error on chunk {i + 1}: {e}")
+
+    print(f"  ✅ Done — {inserted}/{len(all_docs)} chunks inserted.")
+
+
 def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
-    """Returns list of (page_number, page_text) tuples."""
     pages = []
-    reader = pypdf.PdfReader(str(pdf_path))
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
+    doc = fitz.open(str(pdf_path))
+    for i, page in enumerate(doc):
+        # "text" mode preserves reading order better than pypdf
+        text = page.get_text("text")
         if text.strip():
             pages.append((i + 1, text))
+    doc.close()
     return pages
 
 
 def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
-    """
-    Route each page through the right splitter:
-      - pages that contain Markdown tables → TableSplitter
-        (extracts tables as structured docs, then chunks remaining prose)
-      - pure prose pages → DndTextSplitter
-        (splits on section headers, falls back to recursive char splitting)
+    # Skip TOC, credits, and OCR garbage pages entirely
+    if is_junk_page(text):
+        return []
 
-    Every returned Document gets a 'page' key in its metadata.
-    """
-    # A pipe character on a line is a reliable proxy for a Markdown table row
+    text = clean_pdf_text(text)
+
+    # Skip if cleaning left us with nothing substantial
+    if len(text.strip()) < 50:
+        return []
+
     has_table = "|" in text
+    docs = (
+        table_splitter.create_documents([text], source=source)
+        if has_table
+        else prose_splitter.create_documents([text])
+    )
 
-    if has_table:
-        docs = table_splitter.create_documents([text], source=source)
-    else:
-        docs = prose_splitter.create_documents([text])
-
-    # Stamp the source page number onto every chunk
     for doc in docs:
         doc.metadata["page"] = page_num
 

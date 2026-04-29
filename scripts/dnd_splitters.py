@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Literal
+from collections import Counter
 
 # ── Types ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,43 @@ _TABLE_TYPE_HINTS: dict[str, list[str]] = {
     ],
 }
 
+# Patterns that identify non-content pages to skip entirely
+_SKIP_PAGE_PATTERNS = [
+    re.compile(r"^\s*table\s+of\s+contents", re.IGNORECASE),
+    re.compile(r"^\s*contents\s*$", re.IGNORECASE),
+    # TOC entries: lines ending in ".... 42" or "Chapter 3...... 18"
+    re.compile(r"\.{3,}\s*\d+\s*$", re.MULTILINE),
+]
+
+# Pages where >40% of lines look like TOC entries are skipped
+_TOC_LINE_RE = re.compile(r"\.{2,}\s*\d+\s*$")
+
+
+def is_junk_page(text: str) -> bool:
+    """Returns True for TOC pages, credits pages, and OCR garbage pages."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines:
+        return True
+
+    # Skip if any strong skip pattern matches
+    for pattern in _SKIP_PAGE_PATTERNS:
+        if pattern.search(text):
+            return True
+
+    # Skip if >40% of non-empty lines look like TOC entries
+    toc_lines = sum(1 for l in lines if _TOC_LINE_RE.search(l))
+    if toc_lines / len(lines) > 0.4:
+        return True
+
+    # Skip if average word length is suspiciously low (OCR garbage)
+    words = text.split()
+    if words:
+        avg_word_len = sum(len(w) for w in words) / len(words)
+        if avg_word_len < 2.5:
+            return True
+
+    return False
+
 
 def _infer_table_type(headers: list[str], context_hint: str = "") -> DndTableType:
     haystack = " ".join(headers + [context_hint]).lower()
@@ -76,6 +114,67 @@ def _infer_table_type(headers: list[str], context_hint: str = "") -> DndTableTyp
         if any(kw in haystack for kw in keywords):
             return table_type  # type: ignore[return-value]
     return "unknown"
+
+
+def clean_pdf_text(text: str) -> str:
+    # Rejoin hyphenated line breaks ("loca-\ntions" → "locations")
+    text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)
+
+    # Remove page header/footer noise e.g. "CHAPTER1|THEBASICS 5"
+    text = re.sub(r"\b[A-Z]+\d*\|[A-Z]+\s+\d+\b", "", text)
+
+    # Remove standalone page numbers (line is just a number)
+    text = re.sub(r"^\s*\d+\s*$", "", text, flags=re.MULTILINE)
+
+    # Remove credits-style lines: "Name, Name, Name" with 3+ commas
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        # Drop lines that are pure comma-separated names (credits/attribution)
+        if line.count(",") >= 3 and re.match(r"^[\w\s,\.]+$", line.strip()):
+            continue
+        # Drop very short lines that are clearly TOC fragments
+        stripped = line.strip()
+        if stripped and len(stripped) < 4:
+            continue
+        cleaned.append(line)
+
+    text = "\n".join(cleaned)
+
+    # Collapse excess blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def build_boilerplate_blacklist(
+    pages: list[tuple[int, str]],
+    min_occurrences: int = 4,
+    max_fragment_len: int = 120,
+) -> set[str]:
+    """
+    Finds text fragments that repeat across many pages — these are
+    headers, footers, sidebar callouts, and running marginalia that
+    should be stripped from every page before chunking.
+    """
+    # Collect all non-trivial lines across all pages
+    line_counts: Counter = Counter()
+    for _, text in pages:
+        for line in text.splitlines():
+            stripped = line.strip()
+            # Only consider lines of meaningful but bounded length
+            if 8 < len(stripped) <= max_fragment_len:
+                line_counts[stripped] += 1
+
+    # Any line appearing on 4+ distinct pages is boilerplate
+    return {line for line, count in line_counts.items() if count >= min_occurrences}
+
+
+def remove_boilerplate(text: str, blacklist: set[str]) -> str:
+    """Strip all blacklisted lines from a page's text."""
+    lines = text.splitlines()
+    cleaned = [l for l in lines if l.strip() not in blacklist]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
 
 
 # ── DndTextSplitter ────────────────────────────────────────────────────────

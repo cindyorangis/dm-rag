@@ -356,15 +356,6 @@ app/
  │   ├── repository.ts                # getCombatState(), upsertCombatState()
  │   └── types.ts                     # Combatant, CombatState, CombatLogEntry,
  |                                    # DeathResolutionType types
- ├── text-splitters/                  # D&D-aware document chunking pipeline
- │   ├── dnd-splitter.ts              # DndTextSplitter — splits on chapter/section headers
- |   |                                # before falling back to RecursiveCharacterTextSplitter
- │   ├── table-splitters.ts           # parseDndTables(), createDocumentFromTable() —
- |   |                                # extracts Markdown tables into typed Document objects;
- |   |                                # infers tableType (monsters/spells/items) from headers
- │   └── splitters.ts                 # SplitterFactory — selects dnd/table/standard splitter;
- |                                    # TableSplitter with overlap-aware prose chunking;
- |                                    # shared DndSplitter interface for all three types
  ├── character.ts                     # Character sheet utilities
  ├── dm-prompt.ts                     # DM system prompt builder — adventure-aware title,
  |                                    # setting, and tone via ADVENTURE_META; injects combat
@@ -382,6 +373,15 @@ app/
                                       # pendingRolls parsed from DM [ROLL:] tags,
                                       # parsedDM updated live as stream arrives
 scripts/
+ ├── dnd_splitters.py                 # D&D-aware document chunking pipeline
+ |                                    # DndTextSplitter — splits on chapter/section headers
+ |                                    # before falling back to RecursiveCharacterTextSplitter
+ │                                    # parseDndTables(), createDocumentFromTable() —
+ |                                    # extracts Markdown tables into typed Document objects;
+ |                                    # infers tableType (monsters/spells/items) from headers
+ │                                    # SplitterFactory — selects dnd/table/standard splitter;
+ |                                    # TableSplitter with overlap-aware prose chunking;
+ |                                    # shared DndSplitter interface for all three types
  └── ingest.py                        # Document ingestion pipeline — processes core/ and
                                       # adventures/ subdirectories, tags each chunk with
                                       # category and adventure_slug for scoped RAG retrieval
