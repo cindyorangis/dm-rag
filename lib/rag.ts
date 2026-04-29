@@ -1,4 +1,10 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { Document } from "@langchain/core/documents";
+import { DndTextSplitter } from "./text-splitters/dnd-splitter";
+import {
+  parseDndTables,
+  createDocumentFromTable,
+} from "./text-splitters/table-splitters";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_EMBED_MODEL = "mxbai-embed-large";
@@ -56,6 +62,56 @@ interface RerankResult {
   adventureId: string;
 }
 
+export class DnDRAGPipeline {
+  private splitter: DndTextSplitter;
+  private tableParser: typeof parseDndTables;
+
+  constructor(chunkSize: number = 1000) {
+    this.splitter = new DndTextSplitter(chunkSize);
+    this.tableParser = parseDndTables;
+  }
+
+  async splitDndText(text: string, source: string): Promise<Document[]> {
+    const documents: Document[] = [];
+
+    // 1. Try to extract tables first
+    const tables = this.tableParser(text, source);
+
+    for (const table of tables) {
+      const doc = createDocumentFromTable(table);
+      documents.push(doc);
+    }
+
+    // 2. For remaining text, use custom splitter
+    const remainingText = text
+      .replace(/\|.*\|/g, " | ") // Break tables to not interfere with text splitting
+      .replace(/#.*?#\s*\n/g, "\n"); // Break headers
+
+    // splitText is async — must await before iterating
+    const chunks = await this.splitter.splitText(remainingText);
+
+    for (const chunk of chunks) {
+      documents.push(
+        new Document({
+          pageContent: chunk,
+          metadata: {
+            source,
+            chunkType: "text",
+          },
+        }),
+      );
+    }
+
+    return documents;
+  }
+
+  async splitDndPdf(pdfContent: string, fileName: string): Promise<Document[]> {
+    return await this.splitDndText(pdfContent, fileName);
+  }
+}
+
+export default DnDRAGPipeline;
+
 // Perform vector search using embeddings
 export async function performVectorSearch(
   query: string,
@@ -85,7 +141,6 @@ export async function performVectorSearch(
 }
 
 // Calculate keyword scores using Supabase full-text search
-// This implements a basic BM25-like approach for keyword matching
 export async function calculateKeywordScores(
   query: string,
   adventureSlug: string,
@@ -126,19 +181,12 @@ export async function retrieveChunks(
   let vectorResults: VectorSearchResult[] = [];
   let keywordResults: KeywordSearchResult[] = [];
 
-  // Perform both searches if hybrid search is enabled
   if (useHybridSearch) {
     try {
-      vectorResults = await performVectorSearch(
-        query,
-        adventureSlug,
-        topKForReRank,
-      );
-      keywordResults = await calculateKeywordScores(
-        query,
-        adventureSlug,
-        topKForReRank,
-      );
+      [vectorResults, keywordResults] = await Promise.all([
+        performVectorSearch(query, adventureSlug, topKForReRank),
+        calculateKeywordScores(query, adventureSlug, topKForReRank),
+      ]);
     } catch (error) {
       if (process.env.NODE_ENV === "production") {
         console.warn(
@@ -159,51 +207,41 @@ export async function retrieveChunks(
     );
   }
 
-  // Combine results using weighted score
+  // Combine results using weighted scores
   const combinedMap = new Map<string, CombinedResult>();
 
-  // Add vector results
-  vectorResults.forEach((result) => {
-    const existing = combinedMap.get(result.id);
-    if (!existing) {
-      combinedMap.set(result.id, {
-        id: result.id, // <-- Ensure id is set
-        vectorScore: Math.min(result.similarity, 1.0),
-        keywordScore: 0,
-        content: result.content,
-      });
-    }
-  });
+  for (const result of vectorResults) {
+    combinedMap.set(result.id, {
+      id: result.id,
+      vectorScore: Math.min(result.similarity, 1.0),
+      keywordScore: 0,
+      content: result.content,
+    });
+  }
 
-  // Add keyword results (use exact IDs)
-  keywordResults.forEach((result) => {
+  for (const result of keywordResults) {
     const existing = combinedMap.get(result.id);
     if (!existing) {
       combinedMap.set(result.id, {
-        id: result.id, // <-- Ensure id is set
+        id: result.id,
         vectorScore: 0,
         keywordScore: result.score,
         content: result.content,
       });
-    } else {
-      // Boost existing entry if keyword score is good
-      if (result.score > 0.3) {
-        const boost = 1.2;
-        const newVectorScore =
+    } else if (result.score > 0.3) {
+      // Boost entries that appear in both result sets
+      const boost = 1.2;
+      combinedMap.set(result.id, {
+        ...existing,
+        vectorScore:
           existing.vectorScore * vectorWeight +
-          result.score * keywordWeight * boost;
-        combinedMap.set(result.id, {
-          id: result.id, // <-- Ensure id is preserved
-          vectorScore: newVectorScore,
-          keywordScore: existing.vectorScore,
-          content: existing.content,
-        });
-      }
+          result.score * keywordWeight * boost,
+        keywordScore: result.score,
+      });
     }
-  });
+  }
 
-  // Convert to array and sort
-  const sortedResults = Array.from(combinedMap.values())
+  return Array.from(combinedMap.values())
     .map((item) => ({
       id: item.id,
       content: item.content,
@@ -214,12 +252,9 @@ export async function retrieveChunks(
     }))
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, matchCount);
-
-  return sortedResults;
 }
 
-// Re-rank results using cross-encoder (simulated for TypeScript)
-// In production, you'd use FlashRank or similar
+// Re-rank results using cross-encoder (simulated — replace with FlashRank in production)
 export async function rerankResults(
   query: string,
   results: RAGChunk[],
@@ -227,24 +262,22 @@ export async function rerankResults(
 ): Promise<RerankResult[]> {
   console.log(`🔄 Re-ranking ${results.length} results...`);
 
-  // For now, we'll use a simple scoring approach
-  // In production, integrate with FlashRank or similar
-  const reranked = results.map((result) => ({
-    id: result.id,
-    content: result.content,
-    score: result.similarity, // Placeholder - would use cross-encoder score
-    similarity: result.similarity,
-    section: result.section,
-    adventureId: result.adventureId,
-  }));
-
-  // Sort by score and take top N
-  const topResults = reranked.sort((a, b) => b.score - a.score).slice(0, topN);
+  const reranked = results
+    .map((result) => ({
+      id: result.id,
+      content: result.content,
+      score: result.similarity,
+      similarity: result.similarity,
+      section: result.section,
+      adventureId: result.adventureId,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN);
 
   console.log(
-    `✅ Re-ranking complete. Top ${topResults.length} results selected.`,
+    `✅ Re-ranking complete. Top ${reranked.length} results selected.`,
   );
-  return topResults;
+  return reranked;
 }
 
 // Advanced retrieval with re-ranking
@@ -255,22 +288,13 @@ export async function retrieveChunksWithReRank(
   finalMatchCount = 3,
   config: RAGRetrievalConfig = {},
 ): Promise<RerankResult[]> {
-  // Stage 1: Retrieve top candidates
   const initialResults = await retrieveChunks(
     query,
     adventureSlug,
     initialMatchCount,
     config,
   );
-
-  // Stage 2: Re-rank results
-  const rerankedResults = await rerankResults(
-    query,
-    initialResults,
-    finalMatchCount,
-  );
-
-  return rerankedResults;
+  return rerankResults(query, initialResults, finalMatchCount);
 }
 
 // Fallback: Vector-only search (legacy behavior)
@@ -322,10 +346,7 @@ export async function embedText(text: string): Promise<number[]> {
   const res = await fetch(`${baseUrl}/api/embeddings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: embedModel,
-      prompt: text,
-    }),
+    body: JSON.stringify({ model: embedModel, prompt: text }),
   });
 
   if (!res.ok) throw new Error(`Ollama embed failed: ${res.statusText}`);

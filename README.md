@@ -72,7 +72,47 @@ python scripts/ingest.py
 
 The script skips documents already in the database, so it's safe to re-run after adding new PDFs.
 
-### 2. Adventure & Character Selection
+### 2. D&D-Aware Text Splitting
+
+Standard fixed-size chunking breaks D&D source material in ways that destroy meaning — a monster's stat block split across two chunks, a spell's casting time separated from its effect, a table row orphaned from its headers. The app uses a three-splitter pipeline specifically designed for D&D document structure.
+
+#### `DndTextSplitter`
+
+Splits text by structural section boundaries before falling back to size-based chunking. It first attempts to divide text on chapter titles (`# Monsters`), section headers (`## Actions`), sub-sections (`### Stats`), and named D&D sections (`Actions:`, `Reactions:`, `Traits:`, `Lore:`). Sections that still exceed `chunkSize` after this pass are handed to `RecursiveCharacterTextSplitter` with a D&D-aware separator hierarchy (`\n\n` → `\n` → `. ` → ` ` → character-level fallback).
+
+#### `TableSplitter`
+
+Markdown tables in D&D books (monster lists, spell tables, equipment lists) are structurally distinct from prose — they should not be mid-row chunked or mixed with surrounding text. `TableSplitter` extracts all Markdown tables from the input first, converts each to a set of labelled key-value `Document` objects, then strips the table rows from the remaining prose before passing it through the overlap-aware text chunker. This ensures every table row becomes its own retrievable document with clean metadata.
+
+Table type (`monsters`, `spells`, `items`) is inferred automatically from headers and surrounding context using a keyword matching approach — headers like `CR`, `Hit Points`, `AC` resolve to `monsters`; `Casting Time`, `Duration`, `School` resolve to `spells`; and so on.
+
+#### `SplitterFactory`
+
+A factory that selects the right splitter for the content being processed:
+
+```ts
+import { SplitterFactory } from '@/lib/text-splitters/splitters'
+
+const splitter = SplitterFactory.create('dnd', { chunkSize: 1000, chunkOverlap: 100 })
+const chunks = await splitter.splitText(text)
+
+const tableSplitter = SplitterFactory.create('table', { chunkSize: 1000, chunkOverlap: 100 })
+const docs = await tableSplitter.createDocuments([text], [{ source: 'MM' }])
+```
+
+| Type | Best for |
+| -------- | ------------------------------------------ |
+| `dnd` | Prose sections, rules text, lore passages |
+| `table` | Monster lists, spell tables, item tables |
+| `standard` | Generic fallback; uses `RecursiveCharacterTextSplitter` |
+
+All three splitter types implement the same `DndSplitter` interface (`splitText` + `createDocuments`), so they are interchangeable in the ingestion pipeline without any call-site changes.
+
+#### Why This Matters for RAG Quality
+
+Standard vector search alone struggles with D&D rules nuances — it cannot reliably distinguish "Action" from "Bonus Action" when those terms appear in the same chunk alongside unrelated content. Structure-aware splitting ensures that each chunk contains exactly one coherent rules concept, which dramatically improves retrieval precision. A query for "Goblin stat block" retrieves the goblin's full stat block as a single document rather than a fragment of it.
+
+### 3. Adventure & Character Selection
 
 Before a session begins, the player selects an adventure and a hero from a roster of premade characters stored in the database. The chosen `adventure_slug` is persisted to the session row and carried through every subsequent request — routing RAG queries, setting the DM's tone, and determining which encounter stat blocks to spawn in combat.
 
@@ -80,7 +120,7 @@ Each character comes fully built with name, race, class, background, ability sco
 
 Character details are persisted to the session and injected into every DM system prompt, so the LLM always knows who it's talking to. A **"Who am I?"** button in the session header lets you ask the DM to describe your character at any time.
 
-### 3. Opening Narration
+### 4. Opening Narration
 
 When a new session is created, the app immediately generates an immersive opening narration — before the player types a single word. Each adventure has its own scene-setting prompt:
 
@@ -90,7 +130,7 @@ When a new session is created, the app immediately generates an immersive openin
 
 No "Welcome to the adventure." No prompts. Just the world.
 
-### 4. Advanced RAG Pipeline (Every Message)
+### 5. Advanced RAG Pipeline (Every Message)
 
 When you send a message — whether it's "I attack the goblin" or "What are the rules for grappling?" — the following happens:
 
@@ -112,7 +152,7 @@ Standard vector search alone fails at D&D rules nuances (e.g., distinguishing "A
 
 This ensures accurate rules lookup and prevents hallucinations.
 
-### 5. Structured DM Output
+### 6. Structured DM Output
 
 Every DM response is structured into three parts via prompt instructions and parsed before rendering:
 
@@ -126,7 +166,7 @@ Each DM message is rendered by `DMMessage` in `components/ChatMessage.tsx`, whic
 
 A two-pass fallback parser handles legacy messages and cases where the LLM drifts from the format: pass 1 catches labeled blocks like `Combat State: * ...`; pass 2 catches status-flavored sentences at paragraph boundaries. Hints are only rendered for structured responses.
 
-### 6. Combat System
+### 7. Combat System
 
 When combat begins, the app transitions into a structured turn-based mode:
 
@@ -140,7 +180,7 @@ When combat begins, the app transitions into a structured turn-based mode:
 - **Conditions** (poisoned, prone, grappled, etc.) are tracked per combatant
 - Combat ends when all monsters (or the player) reach 0 HP — the DM narrates the outcome and the session returns to exploration mode
 
-### 7. Death Resolution System
+### 8. Death Resolution System
 
 Reaching 0 HP never ends the session. Instead, the app treats player death as a **narrative pivot point** — the story continues, but the situation changes dramatically. When the player drops to 0 HP, a resolution type is selected at random from four possible outcomes, each of which is narrated by the DM as a seamless story beat.
 
@@ -159,7 +199,7 @@ On the next chat turn, `buildDMSystemPrompt` detects the unresolved death (`appl
 
 The resolution is stored in `combat_state.combatants` (JSONB), so it survives page refreshes and session resumes correctly.
 
-### 8. Session Sidebar
+### 9. Session Sidebar
 
 The session page includes a persistent sidebar with three tabs:
 
@@ -167,7 +207,7 @@ The session page includes a persistent sidebar with three tabs:
 - **Combat** — live initiative order sorted by roll, HP bars that shift green → amber → red as combatants take damage, AC and initiative values, active conditions, and a scrollable combat log. Shows a "waiting for initiative roll" state when combat has just started. Auto-switches to this tab when combat begins.
 - **Log** — session stats (message count, DM responses, combat rounds), a D&D 5e quick reference card, and clickable phrase shortcuts that pre-fill the input box.
 
-### 9. Session Journal & Save System
+### 10. Session Journal & Save System
 
 Sessions are never lost. When you're done playing, you have two options:
 
@@ -310,6 +350,15 @@ app/
  │   ├── repository.ts                # getCombatState(), upsertCombatState()
  │   └── types.ts                     # Combatant, CombatState, CombatLogEntry,
  |                                    # DeathResolutionType types
+ ├── text-splitters/                  # D&D-aware document chunking pipeline
+ │   ├── dnd-splitter.ts              # DndTextSplitter — splits on chapter/section headers
+ |   |                                # before falling back to RecursiveCharacterTextSplitter
+ │   ├── table-splitters.ts           # parseDndTables(), createDocumentFromTable() —
+ |   |                                # extracts Markdown tables into typed Document objects;
+ |   |                                # infers tableType (monsters/spells/items) from headers
+ │   └── splitters.ts                 # SplitterFactory — selects dnd/table/standard splitter;
+ |                                    # TableSplitter with overlap-aware prose chunking;
+ |                                    # shared DndSplitter interface for all three types
  ├── character.ts                     # Character sheet utilities
  ├── dm-prompt.ts                     # DM system prompt builder — adventure-aware title,
  |                                    # setting, and tone via ADVENTURE_META; injects combat
@@ -626,8 +675,8 @@ alter table sessions add column if not exists narrative_flags jsonb default '{}'
 ### Pull required Ollama models
 
 ```bash
-ollama pull llama3
-ollama pull nomic-embed-text
+ollama pull llama3.1:8b
+ollama pull mxbai-embed-large
 ```
 
 > Run `ollama list` to verify your installed model names. The chat model name in your `.env.local` must exactly match what Ollama reports (e.g. `llama3.2` instead of `llama3`).
@@ -699,7 +748,8 @@ The script is idempotent — it checks for existing document titles and skips an
 | 12    | Save & resume — pause sessions, continue where you left off         | ✅ Complete |
 | 13    | Death resolution — 0 HP as narrative pivot, not game over           | ✅ Complete |
 | 14    | Multi-adventure support — scoped RAG, per-adventure DM tone         | ✅ Complete |
-| 15    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
+| 15    | D&D-aware text splitting — structure-preserving chunking pipeline   | ✅ Complete |
+| 16    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 
