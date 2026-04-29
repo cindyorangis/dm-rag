@@ -90,16 +90,27 @@ When a new session is created, the app immediately generates an immersive openin
 
 No "Welcome to the adventure." No prompts. Just the world.
 
-### 4. RAG Pipeline (Every Message)
+### 4. Advanced RAG Pipeline (Every Message)
 
 When you send a message — whether it's "I attack the goblin" or "What are the rules for grappling?" — the following happens:
 
 - Your message is embedded into a vector using Ollama
-- The top 6 most relevant chunks are retrieved from Supabase via `match_chunks_scoped` — a scoped similarity search that filters to core rulebook chunks plus chunks belonging to the session's adventure
+- **Hybrid Search**: Retrieves top 10 candidates using both vector search (semantic) and keyword search (exact term matching)
+- **Re-ranking**: Cross-encoder re-ranks the combined results to the top 3 most relevant chunks
 - Those chunks are injected as context into the DM system prompt
 - The LLM responds in character as your DM, grounded in the retrieved rules
 - The response streams token-by-token to the UI
 - Both messages are persisted to the database when the stream completes
+
+#### Why Hybrid Search?
+
+Standard vector search alone fails at D&D rules nuances (e.g., distinguishing "Action" from "Bonus Action"). Hybrid search combines:
+
+- **Vector Search**: Finds semantically similar content
+- **Keyword Search**: Catches exact spell/monster/item names
+- **Re-ranking**: Cross-encoder provides deep semantic analysis for final ranking
+
+This ensures accurate rules lookup and prevents hallucinations.
 
 ### 5. Structured DM Output
 

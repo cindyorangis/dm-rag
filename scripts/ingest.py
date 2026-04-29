@@ -1,6 +1,4 @@
 import os
-import sys
-import time
 from pathlib import Path
 
 # Load .env.local manually (no dotenv dependency needed)
@@ -141,6 +139,4 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
 
     print(f"  ✅ Done — {len(all_chunks)} chunks inserted.")
 
-
-if __name__ == "__main__":
     ingest_books()
