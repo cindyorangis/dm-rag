@@ -91,19 +91,25 @@ Table type (`monsters`, `spells`, `items`) is inferred automatically from header
 A factory that selects the right splitter for the content being processed:
 
 ```ts
-import { SplitterFactory } from '@/lib/text-splitters/splitters'
+import { SplitterFactory } from "@/lib/text-splitters/splitters";
 
-const splitter = SplitterFactory.create('dnd', { chunkSize: 1000, chunkOverlap: 100 })
-const chunks = await splitter.splitText(text)
+const splitter = SplitterFactory.create("dnd", {
+  chunkSize: 1000,
+  chunkOverlap: 100,
+});
+const chunks = await splitter.splitText(text);
 
-const tableSplitter = SplitterFactory.create('table', { chunkSize: 1000, chunkOverlap: 100 })
-const docs = await tableSplitter.createDocuments([text], [{ source: 'MM' }])
+const tableSplitter = SplitterFactory.create("table", {
+  chunkSize: 1000,
+  chunkOverlap: 100,
+});
+const docs = await tableSplitter.createDocuments([text], [{ source: "MM" }]);
 ```
 
-| Type | Best for |
-| -------- | ------------------------------------------ |
-| `dnd` | Prose sections, rules text, lore passages |
-| `table` | Monster lists, spell tables, item tables |
+| Type       | Best for                                                |
+| ---------- | ------------------------------------------------------- |
+| `dnd`      | Prose sections, rules text, lore passages               |
+| `table`    | Monster lists, spell tables, item tables                |
 | `standard` | Generic fallback; uses `RecursiveCharacterTextSplitter` |
 
 All three splitter types implement the same `DndSplitter` interface (`splitText` + `createDocuments`), so they are interchangeable in the ingestion pipeline without any call-site changes.

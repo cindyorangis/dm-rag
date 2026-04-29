@@ -1,25 +1,19 @@
 import { supabaseAdmin } from "@/lib/supabase";
-import { Document } from "@langchain/core/documents";
-import { DndTextSplitter } from "./text-splitters/dnd-splitter";
-import {
-  parseDndTables,
-  createDocumentFromTable,
-} from "./text-splitters/table-splitters";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_EMBED_MODEL = "mxbai-embed-large";
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
 export interface RAGRetrievalConfig {
-  // Hybrid search configuration
+  /** Enable hybrid vector + keyword search. Default: true */
   useHybridSearch?: boolean;
-  // Weights for combining vector and keyword scores (0.0-1.0)
+  /** Weight applied to vector similarity score (0.0–1.0). Default: 0.7 */
   vectorWeight?: number;
+  /** Weight applied to keyword match score (0.0–1.0). Default: 0.3 */
   keywordWeight?: number;
-  // Re-ranking configuration
+  /** How many candidates to fetch before re-ranking. Default: 20 */
   topKForReRank?: number;
-  // D&D-specific configuration
-  enableSpellBoost?: boolean;
-  enableItemBoost?: boolean;
 }
 
 export interface RAGChunk {
@@ -30,21 +24,18 @@ export interface RAGChunk {
   adventureId: string;
 }
 
-// Vector search result type
 interface VectorSearchResult {
   id: string;
   content: string;
   similarity: number;
 }
 
-// Keyword search result type
 interface KeywordSearchResult {
   id: string;
   score: number;
   content: string;
 }
 
-// Combined result type for hybrid search
 interface CombinedResult {
   id: string;
   vectorScore: number;
@@ -52,7 +43,6 @@ interface CombinedResult {
   content: string;
 }
 
-// Re-ranking result type
 interface RerankResult {
   id: string;
   content: string;
@@ -62,57 +52,26 @@ interface RerankResult {
   adventureId: string;
 }
 
-export class DnDRAGPipeline {
-  private splitter: DndTextSplitter;
-  private tableParser: typeof parseDndTables;
+// ── Embedding ──────────────────────────────────────────────────────────────
 
-  constructor(chunkSize: number = 1000) {
-    this.splitter = new DndTextSplitter(chunkSize);
-    this.tableParser = parseDndTables;
-  }
+export async function embedText(text: string): Promise<number[]> {
+  const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
+  const embedModel =
+    process.env.OLLAMA_EMBED_MODEL || DEFAULT_OLLAMA_EMBED_MODEL;
 
-  async splitDndText(text: string, source: string): Promise<Document[]> {
-    const documents: Document[] = [];
+  const res = await fetch(`${baseUrl}/api/embeddings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: embedModel, prompt: text }),
+  });
 
-    // 1. Try to extract tables first
-    const tables = this.tableParser(text, source);
-
-    for (const table of tables) {
-      const doc = createDocumentFromTable(table);
-      documents.push(doc);
-    }
-
-    // 2. For remaining text, use custom splitter
-    const remainingText = text
-      .replace(/\|.*\|/g, " | ") // Break tables to not interfere with text splitting
-      .replace(/#.*?#\s*\n/g, "\n"); // Break headers
-
-    // splitText is async — must await before iterating
-    const chunks = await this.splitter.splitText(remainingText);
-
-    for (const chunk of chunks) {
-      documents.push(
-        new Document({
-          pageContent: chunk,
-          metadata: {
-            source,
-            chunkType: "text",
-          },
-        }),
-      );
-    }
-
-    return documents;
-  }
-
-  async splitDndPdf(pdfContent: string, fileName: string): Promise<Document[]> {
-    return await this.splitDndText(pdfContent, fileName);
-  }
+  if (!res.ok) throw new Error(`Ollama embed failed: ${res.statusText}`);
+  const data = await res.json();
+  return data.embedding as number[];
 }
 
-export default DnDRAGPipeline;
+// ── Search ─────────────────────────────────────────────────────────────────
 
-// Perform vector search using embeddings
 export async function performVectorSearch(
   query: string,
   adventureSlug: string,
@@ -136,11 +95,9 @@ export async function performVectorSearch(
   });
 
   if (error) throw new Error(`Vector search failed: ${error.message}`);
-
   return (data as VectorSearchResult[]) || [];
 }
 
-// Calculate keyword scores using Supabase full-text search
 export async function calculateKeywordScores(
   query: string,
   adventureSlug: string,
@@ -164,7 +121,16 @@ export async function calculateKeywordScores(
   return (data as KeywordSearchResult[]) || [];
 }
 
-// Advanced RAG retrieval with hybrid search combining vector and keyword approaches
+// ── Retrieval ──────────────────────────────────────────────────────────────
+
+/**
+ * Primary retrieval function. Runs hybrid vector + keyword search,
+ * combines scores with configurable weights, and returns ranked chunks.
+ *
+ * All splitting happens at ingestion time (scripts/ingest.py +
+ * scripts/dnd_splitters.py). This function only reads pre-chunked rows
+ * from Supabase.
+ */
 export async function retrieveChunks(
   query: string,
   adventureSlug: string,
@@ -193,8 +159,6 @@ export async function retrieveChunks(
           "Hybrid search unavailable, falling back to vector-only:",
           error,
         );
-        vectorResults = [];
-        keywordResults = [];
       } else {
         throw error;
       }
@@ -207,7 +171,7 @@ export async function retrieveChunks(
     );
   }
 
-  // Combine results using weighted scores
+  // Merge vector and keyword results, boosting chunks that appear in both
   const combinedMap = new Map<string, CombinedResult>();
 
   for (const result of vectorResults) {
@@ -229,7 +193,7 @@ export async function retrieveChunks(
         content: result.content,
       });
     } else if (result.score > 0.3) {
-      // Boost entries that appear in both result sets
+      // Boost chunks that appear in both result sets
       const boost = 1.2;
       combinedMap.set(result.id, {
         ...existing,
@@ -254,33 +218,24 @@ export async function retrieveChunks(
     .slice(0, matchCount);
 }
 
-// Re-rank results using cross-encoder (simulated — replace with FlashRank in production)
+// ── Re-ranking ─────────────────────────────────────────────────────────────
+
+/**
+ * Re-ranks a result set. Currently uses the existing similarity score as
+ * a proxy. Replace with a cross-encoder (e.g. FlashRank) for production.
+ */
 export async function rerankResults(
   query: string,
   results: RAGChunk[],
-  topN: number = 3,
+  topN = 3,
 ): Promise<RerankResult[]> {
-  console.log(`🔄 Re-ranking ${results.length} results...`);
-
-  const reranked = results
-    .map((result) => ({
-      id: result.id,
-      content: result.content,
-      score: result.similarity,
-      similarity: result.similarity,
-      section: result.section,
-      adventureId: result.adventureId,
-    }))
+  return results
+    .map((r) => ({ ...r, score: r.similarity }))
     .sort((a, b) => b.score - a.score)
     .slice(0, topN);
-
-  console.log(
-    `✅ Re-ranking complete. Top ${reranked.length} results selected.`,
-  );
-  return reranked;
 }
 
-// Advanced retrieval with re-ranking
+/** Retrieve then re-rank in one call. */
 export async function retrieveChunksWithReRank(
   query: string,
   adventureSlug: string,
@@ -288,45 +243,43 @@ export async function retrieveChunksWithReRank(
   finalMatchCount = 3,
   config: RAGRetrievalConfig = {},
 ): Promise<RerankResult[]> {
-  const initialResults = await retrieveChunks(
+  const initial = await retrieveChunks(
     query,
     adventureSlug,
     initialMatchCount,
     config,
   );
-  return rerankResults(query, initialResults, finalMatchCount);
+  return rerankResults(query, initial, finalMatchCount);
 }
 
-// Fallback: Vector-only search (legacy behavior)
+// ── Fallbacks ──────────────────────────────────────────────────────────────
+
+/** Vector-only retrieval — legacy fallback. */
 export async function retrieveChunksVectorOnly(
   query: string,
   adventureSlug: string,
   matchCount = 6,
 ): Promise<RAGChunk[]> {
-  const vectorResults = await performVectorSearch(
-    query,
-    adventureSlug,
-    matchCount,
-  );
-  return vectorResults.map((chunk) => ({
+  const results = await performVectorSearch(query, adventureSlug, matchCount);
+  return results.map((chunk) => ({
     ...chunk,
     section: chunk.content.split("\n")[0] || "General",
     adventureId: adventureSlug,
   }));
 }
 
-// Fallback: Keyword-only search (useful for proper nouns, spell names)
+/** Keyword-only retrieval — useful for proper nouns, spell/monster names. */
 export async function retrieveChunksKeywordOnly(
   query: string,
   adventureSlug: string,
   matchCount = 6,
 ): Promise<RAGChunk[]> {
-  const keywordResults = await calculateKeywordScores(
+  const results = await calculateKeywordScores(
     query,
     adventureSlug,
     matchCount,
   );
-  return keywordResults
+  return results
     .map((chunk) => ({
       id: chunk.id,
       content: chunk.content,
@@ -336,20 +289,4 @@ export async function retrieveChunksKeywordOnly(
     }))
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, matchCount);
-}
-
-export async function embedText(text: string): Promise<number[]> {
-  const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
-  const embedModel =
-    process.env.OLLAMA_EMBED_MODEL || DEFAULT_OLLAMA_EMBED_MODEL;
-
-  const res = await fetch(`${baseUrl}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: embedModel, prompt: text }),
-  });
-
-  if (!res.ok) throw new Error(`Ollama embed failed: ${res.statusText}`);
-  const data = await res.json();
-  return data.embedding as number[];
 }

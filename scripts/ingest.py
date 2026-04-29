@@ -15,16 +15,25 @@ import ollama
 from supabase import create_client
 import pypdf
 
+from dnd_splitters import SplitterFactory, Document
+
 # ── Config ─────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.environ["NEXT_PUBLIC_SUPABASE_URL"]
 SUPABASE_KEY = os.environ["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]
 BOOKS_DIR = Path(__file__).parent / "books"
-CHUNK_SIZE = 500  # characters
-CHUNK_OVERLAP = 100  # characters overlap between chunks
-EMBED_MODEL = "mxbai-embed-large"  # local via Ollama, 1024 dimensions
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 100
+EMBED_MODEL = "mxbai-embed-large"
 
 # ── Clients ────────────────────────────────────────────────────────────────
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ── Splitters ──────────────────────────────────────────────────────────────
+# Use the table splitter for pages that contain Markdown tables (stat blocks,
+# spell lists, equipment tables) and the dnd splitter for pure prose.
+# Both are constructed once and reused across all documents.
+table_splitter = SplitterFactory.create("table", CHUNK_SIZE, CHUNK_OVERLAP)
+prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -39,17 +48,29 @@ def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
     return pages
 
 
-def chunk_text(page_num: int, text: str) -> list[dict]:
-    """Split page text into overlapping chunks."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + CHUNK_SIZE
-        chunk = text[start:end]
-        if chunk.strip():
-            chunks.append({"page": page_num, "content": chunk.strip()})
-        start += CHUNK_SIZE - CHUNK_OVERLAP
-    return chunks
+def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
+    """
+    Route each page through the right splitter:
+      - pages that contain Markdown tables → TableSplitter
+        (extracts tables as structured docs, then chunks remaining prose)
+      - pure prose pages → DndTextSplitter
+        (splits on section headers, falls back to recursive char splitting)
+
+    Every returned Document gets a 'page' key in its metadata.
+    """
+    # A pipe character on a line is a reliable proxy for a Markdown table row
+    has_table = "|" in text
+
+    if has_table:
+        docs = table_splitter.create_documents([text], source=source)
+    else:
+        docs = prose_splitter.create_documents([text])
+
+    # Stamp the source page number onto every chunk
+    for doc in docs:
+        doc.metadata["page"] = page_num
+
+    return docs
 
 
 def get_embedding(text: str) -> list[float]:
@@ -93,14 +114,13 @@ def ingest_books():
 def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
     title = pdf_path.name
 
-    # Skip if already ingested (using title as unique key)
     if document_already_ingested(title):
         print(f"  ⚠️  {title} already ingested, skipping.")
         return
 
     print(f"  Processing: {title} ({category} / {adventure_slug or 'N/A'})")
 
-    # 1. Create document record with new metadata
+    # 1. Create document record
     doc_result = (
         supabase.table("documents")
         .insert(
@@ -115,28 +135,39 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
     )
     doc_id = doc_result.data[0]["id"]
 
-    # 2. Extract and Chunk
+    # 2. Extract pages and chunk with D&D-aware splitters
     pages = extract_text_from_pdf(pdf_path)
-    all_chunks = []
+    all_docs: list[Document] = []
     for page_num, page_text in pages:
-        all_chunks.extend(chunk_text(page_num, page_text))
+        all_docs.extend(chunk_page(page_num, page_text, source=title))
 
-    # 3. Embed and insert
-    for i, chunk in enumerate(all_chunks):
+    print(f"     → {len(pages)} pages → {len(all_docs)} chunks")
+
+    # 3. Embed and insert each chunk
+    inserted = 0
+    for i, doc in enumerate(all_docs):
         try:
-            embedding = get_embedding(chunk["content"])
+            embedding = get_embedding(doc.page_content)
             supabase.table("chunks").insert(
                 {
                     "document_id": doc_id,
-                    "content": chunk["content"],
+                    "content": doc.page_content,
                     "embedding": embedding,
-                    "page": chunk["page"],
+                    "page": doc.metadata.get("page"),
+                    # Store chunk_type and table_type if present — useful for debugging
+                    # and future filtered retrieval. These columns are optional; remove
+                    # the lines below if your schema doesn't have them yet.
+                    # "chunk_type":  doc.metadata.get("chunk_type"),
+                    # "table_type":  doc.metadata.get("table_type"),
                 }
             ).execute()
+            inserted += 1
         except Exception as e:
             print(f"\n  ❌ Error on chunk {i + 1}: {e}")
             continue
 
-    print(f"  ✅ Done — {len(all_chunks)} chunks inserted.")
+    print(f"  ✅ Done — {inserted}/{len(all_docs)} chunks inserted.")
 
+
+if __name__ == "__main__":
     ingest_books()
