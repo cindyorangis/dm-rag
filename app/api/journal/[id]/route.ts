@@ -1,25 +1,71 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 
+const validStatuses = ["active", "paused", "completed"] as const;
+
+interface SessionData {
+  id: string;
+  title: string;
+  created_at: string;
+  journal_entry: string | null;
+  status: string;
+}
+
+interface SessionUpdate {
+  journal_entry?: string | null;
+  status?: (typeof validStatuses)[number];
+}
+
+async function getSession(id: string): Promise<SessionData | null> {
+  const { data, error } = await supabaseAdmin
+    .from("sessions")
+    .select("id, title, created_at, journal_entry, status")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    console.error(`Error fetching session ${id}:`, error.message);
+    return null;
+  }
+
+  return data;
+}
+
+async function updateSession(
+  id: string,
+  updates: SessionUpdate,
+): Promise<SessionData | null> {
+  const { data, error } = await supabaseAdmin
+    .from("sessions")
+    .update(updates)
+    .eq("id", id)
+    .select("id, title, created_at, journal_entry, status")
+    .single();
+
+  if (error) {
+    console.error(`Error updating session ${id}:`, error.message);
+    return null;
+  }
+
+  return data;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params;
-    const { data, error } = await supabaseAdmin
-      .from("sessions")
-      .select("id, title, created_at, journal_entry, status")
-      .eq("id", id)
-      .single();
+    const session = await getSession(id);
 
-    if (error) throw new Error(error.message);
-    if (!data)
+    if (!session) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
-    return NextResponse.json({ session: data });
+    return NextResponse.json({ session });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("GET /api/journal/[id] error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -31,17 +77,16 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { journal_entry, status } = body;
 
-    // Validate status values
-    const validStatuses = ["active", "paused", "completed"];
-    if (status && !validStatuses.includes(status)) {
+    // Validate status if provided
+    if (body.status && !validStatuses.includes(body.status)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
-    const updates: Record<string, unknown> = {};
-    if (journal_entry !== undefined) updates.journal_entry = journal_entry;
-    if (status !== undefined) updates.status = status;
+    const updates: SessionUpdate = {};
+    if (body.journal_entry !== undefined)
+      updates.journal_entry = body.journal_entry;
+    if (body.status !== undefined) updates.status = body.status;
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json(
@@ -50,20 +95,16 @@ export async function PATCH(
       );
     }
 
-    const { data, error } = await supabaseAdmin
-      .from("sessions")
-      .update(updates)
-      .eq("id", id)
-      .select("id, title, created_at, journal_entry, status")
-      .single();
+    const session = await updateSession(id, updates);
 
-    if (error) throw new Error(error.message);
-    if (!data)
+    if (!session) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
-    return NextResponse.json({ session: data });
+    return NextResponse.json({ session });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("PATCH /api/journal/[id] error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
