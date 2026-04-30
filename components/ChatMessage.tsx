@@ -3,6 +3,7 @@
 import { parseDMResponse, ParsedDMResponse } from "@/lib/parse-dm-response";
 import { StatusCard } from "./StatusCard";
 import { HintPanel } from "./HintPanel";
+import { NarrativeNotification } from "./NarrativeNotification";
 import type { Message } from "@/hooks/useChat";
 
 function stripRollTags(text: string): string {
@@ -41,6 +42,9 @@ export function DMMessage({
           <span className="inline-block w-2 h-4 ml-1 bg-amber-400 animate-pulse" />
         )}
       </div>
+
+      {/* Telltale-style notifications for flag operations */}
+      <NarrativeNotification parsed={parsed} />
 
       {parsed.statusItems.length > 0 && (
         <StatusCard items={parsed.statusItems} />

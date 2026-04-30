@@ -42,7 +42,9 @@ export function sanitizeNarrativeFlags(input: unknown): NarrativeFlags {
 export function parseNarrativeFlagOpsFromText(
   raw: string,
 ): NarrativeFlagOps | null {
-  const matches = Array.from(raw.matchAll(FLAG_BLOCK_RE));
+  // Strip potential markdown code block markers that LLMs might add
+  const cleaned = raw.replace(/```(json|javascript|js|text)?```/g, "").trim();
+  const matches = Array.from(cleaned.matchAll(FLAG_BLOCK_RE));
   if (matches.length === 0) return null;
 
   const latest = matches[matches.length - 1][1]?.trim();
@@ -117,7 +119,7 @@ export function applyNarrativeFlagOps(
   if (ops.inc) {
     for (const [key, delta] of Object.entries(ops.inc)) {
       const base = typeof next[key] === "number" ? (next[key] as number) : 0;
-      next[key] = base + delta;
+      next[key] = base + (delta as number);
     }
   }
 
