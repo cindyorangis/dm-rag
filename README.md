@@ -219,7 +219,7 @@ ollama pull mxbai-embed-large
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+SUPABASE_SECRET_KEY=your_supabase_secret_key
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_EMBED_MODEL=mxbai-embed-large
 OLLAMA_CHAT_MODEL=llama3.1:8b

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { CombatState, Combatant } from "@/lib/combat/types";
-import type { SupabaseAdminClient } from "@/lib/supabase";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildDMSystemPrompt } from "@/lib/dm-prompt";
 import { getCombatState, upsertCombatState } from "@/lib/combat/repository";
@@ -50,7 +49,7 @@ const DEFAULT_ADVENTURE_SLUG = "lost-mine-of-phandelver";
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
   const conversationHistory = Array.isArray(history) ? history : [];
-  const supabase: SupabaseAdminClient = supabaseAdmin;
+  const supabase = supabaseAdmin;
   const llmProvider = getLlmProvider();
 
   // 1. Load session
@@ -232,7 +231,7 @@ async function updateNarrativeFlagsFromDmResponse({
 }: {
   sessionId: string;
   dmResponse: string;
-  supabase: SupabaseAdminClient;
+  supabase: ReturnType<typeof supabaseAdmin>;
 }) {
   const ops = parseNarrativeFlagOpsFromText(dmResponse);
   if (!ops) return;
