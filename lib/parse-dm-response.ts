@@ -56,7 +56,12 @@ function parseHints(block: string): HintItem[] {
         ? (TAG_MAP[tagMatch[1].toLowerCase()] ?? "action")
         : "action";
       const withoutTag = line.replace(/^\[\w+\]\s*/, "");
-      const [label, prompt] = withoutTag.split("|").map((s) => s.trim());
+
+      // Handle both formats: with | separator and without
+      const parts = withoutTag.split("|");
+      const label = parts[0]?.trim();
+      const prompt = parts[1]?.trim() ?? label;
+
       return {
         text: label ?? withoutTag,
         tag,
@@ -72,7 +77,9 @@ function stripTagRemnants(text: string): string {
     .replace(/\[FLAG_OPS\][\s\S]*?\[\/FLAG_OPS\]/gi, "") // complete FLAG_OPS blocks
     .replace(/\[FLAG_OPS\][\s\S]*$/i, "") // FLAG_OPS block with no closing tag
     .replace(/\[\/?FLAG_OPS\]/gi, "") // any stray FLAG_OPS tags
+    .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/i, "") // HINTS block with closing tag
     .replace(/\[HINTS\][\s\S]*$/i, "") // HINTS block with no closing tag
+    .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/i, "") // STATUS block with closing tag
     .replace(/\[STATUS\][\s\S]*$/i, "") // STATUS block with no closing tag
     .replace(/\[\/?(?:STATUS|HINTS)\]/gi, "") // any stray open/close tags
     .replace(/\n{3,}/g, "\n\n")
@@ -93,6 +100,9 @@ function parseStructured(raw: string): ParsedDMResponse | null {
   );
 
   console.log("=== PARSED STRUCTURE ===\n", raw);
+  console.log("Status block:", statusBlock);
+  console.log("Hints block:", hintsBlock);
+  console.log("Narrative:", narrative);
 
   return {
     narrative: narrative.trim(),

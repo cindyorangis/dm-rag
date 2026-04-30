@@ -284,13 +284,21 @@ class DndTextSplitter:
         return result
 
     def _hard_split(self, text: str) -> list[str]:
-        """Character-level split with overlap as absolute last resort."""
-        chunks: list[str] = []
+        chunks = []
         start = 0
         while start < len(text):
-            end = min(start + self.chunk_size, len(text))
+            end = start + self.chunk_size
+            if end >= len(text):
+                chunks.append(text[start:].strip())
+                break
+
+            # Look for the last space within the chunk to avoid cutting words
+            last_space = text.rfind(" ", start, end)
+            if last_space != -1 and last_space > start:
+                end = last_space
+
             chunks.append(text[start:end].strip())
-            start += max(self.chunk_size - self.chunk_overlap, 1)
+            start = end - self.chunk_overlap  # Maintain overlap from the new end
         return [c for c in chunks if c]
 
 
@@ -386,12 +394,18 @@ def create_document_from_table(table: DndTable) -> Document:
     Mirrors createDocumentFromTable() in table-splitters.ts.
     """
 
-    def _label(key: str) -> str:
-        return key.replace("_", " ").title()
+    # Use the table source or type as a prefix for context
+    context_header = f"Table: {table.source or table.table_type.title()}\n"
 
-    content = "\n\n".join(
-        "\n".join(f"{_label(k)}: {v}" for k, v in row.items()) for row in table.rows
-    ).strip()
+    rows_content = []
+    for row in table.rows:
+        row_str = "\n".join(
+            f"{k.replace('_', ' ').title()}: {v}" for k, v in row.items()
+        )
+        rows_content.append(row_str)
+
+    # Prepend context to the chunk content
+    content = context_header + "\n\n".join(rows_content)
 
     first_row = table.rows[0] if table.rows else {}
     row_index = first_row.get("name") or first_row.get("spell") or "unknown"

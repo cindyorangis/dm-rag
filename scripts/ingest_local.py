@@ -1,4 +1,5 @@
 import os
+import re
 import pymupdf4llm
 import ollama
 from pathlib import Path
@@ -33,6 +34,7 @@ BOOKS_DIR = Path(__file__).parent / "books"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 EMBED_MODEL = "mxbai-embed-large"
+OLLAMA_MODEL = "llama3.1:8b"
 
 # ── Clients ────────────────────────────────────────────────────────────────
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -56,7 +58,7 @@ def clean_structure_with_ollama(text: str) -> str:
     {text}"""
 
     # Using a capable, highly-efficient local model
-    response = ollama.generate(model="llama3.1", prompt=prompt)
+    response = ollama.generate(model=OLLAMA_MODEL, prompt=prompt)
     return response["response"]
 
 
@@ -102,6 +104,7 @@ def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
 
     text = re.sub(r"!\[.*?\]\(.*?\)\n?", "", text)
     text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"==> picture \[.*?\] intentionally omitted <==", "", text)
     text = html_tables_to_markdown(text)
     text = clean_pdf_text(text)
 
