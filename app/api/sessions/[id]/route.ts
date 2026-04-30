@@ -1,21 +1,21 @@
-import { supabaseAdmin } from "@/lib/supabase";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getSessionById } from "@/lib/sessions/service";
 
 export async function GET(
-  _req: NextRequest,
+  _: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params;
+  try {
+    const { id } = await params;
+    const session = await getSessionById(id);
 
-  const { data, error } = await supabaseAdmin
-    .from("sessions")
-    .select("id, title, created_at, status, character_context, narrative_flags")
-    .eq("id", id)
-    .single();
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 404 });
+    return NextResponse.json(session);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  return NextResponse.json(data);
 }
