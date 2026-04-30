@@ -204,3 +204,12 @@ export function parseDMResponsePartial(raw: string): ParsedDMResponse {
 
   return { ...full, narrative };
 }
+
+export const getCleanNarrativeForSpeech = (text: string): string => {
+  return text
+    .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/g, "")
+    .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/g, "")
+    .replace(/\[ROLL:.*?\]/g, "")
+    .replace(/\*.*?\*/g, "")
+    .trim();
+};

@@ -46,3 +46,7 @@ scripts/books/*
 scripts/character_sheets/*
 
 scripts/__pycache__/*
+
+tts-server/__pycache__/*
+tts-server/voices*
+tts-server/kokoro*
