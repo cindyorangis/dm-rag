@@ -10,17 +10,55 @@ export interface HintItem {
   prompt: string;
 }
 
-// ─── Structured parser (prompt-controlled responses) ──────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const TAG_PATTERNS = {
-  status: /\[STATUS\]([\s\S]*?)\[\/STATUS\]/i,
-  hints: /\[HINTS\]([\s\S]*?)\[\/HINTS\]/i,
+const HINT_TAG_MAP: Record<string, HintItem["tag"]> = {
+  explore: "explore",
+  social: "social",
+  action: "action",
+  lore: "lore",
 };
 
-function parseBlock(
+// Matches any of our known structured tags — used to find where narrative ends
+// during streaming before the blocks are fully closed.
+const FIRST_STRUCTURED_TAG_RE = /\[(?:STATUS|HINTS|FLAG_OPS)\]/i;
+
+// ─── Strip Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Removes all structured tag blocks (STATUS, HINTS, FLAG_OPS) and their
+ * contents from a string. Safe to call on partial streams — open-ended blocks
+ * (no closing tag yet) are also stripped.
+ */
+function stripStructuredTags(text: string): string {
+  return (
+    text
+      // Complete blocks
+      .replace(/\[FLAG_OPS\][\s\S]*?\[\/FLAG_OPS\]/gi, "")
+      .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/i, "")
+      .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/i, "")
+      // Open-ended blocks (stream not yet closed)
+      .replace(/\[FLAG_OPS\][\s\S]*$/i, "")
+      .replace(/\[HINTS\][\s\S]*$/i, "")
+      .replace(/\[STATUS\][\s\S]*$/i, "")
+      // Stray open/close tags with no content
+      .replace(/\[\/?(?:STATUS|HINTS|FLAG_OPS)\]/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
+}
+
+// ─── Structured Block Parsers ─────────────────────────────────────────────────
+
+function extractBlock(
   raw: string,
-  pattern: RegExp,
+  openTag: string,
+  closeTag: string,
 ): { inner: string; stripped: string } {
+  const pattern = new RegExp(
+    `\\[${openTag}\\]([\\s\\S]*?)\\[\\/${closeTag}\\]`,
+    "i",
+  );
   const match = raw.match(pattern);
   return {
     inner: match ? match[1].trim() : "",
@@ -39,13 +77,6 @@ function parseBullets(block: string): string[] {
 function parseHints(block: string): HintItem[] {
   if (!block) return [];
 
-  const TAG_MAP: Record<string, HintItem["tag"]> = {
-    explore: "explore",
-    social: "social",
-    action: "action",
-    lore: "lore",
-  };
-
   return block
     .split("\n")
     .map((line) => line.trim())
@@ -53,78 +84,58 @@ function parseHints(block: string): HintItem[] {
     .map((line) => {
       const tagMatch = line.match(/^\[(\w+)\]/);
       const tag = tagMatch
-        ? (TAG_MAP[tagMatch[1].toLowerCase()] ?? "action")
+        ? (HINT_TAG_MAP[tagMatch[1].toLowerCase()] ?? "action")
         : "action";
       const withoutTag = line.replace(/^\[\w+\]\s*/, "");
-
-      // Handle both formats: with | separator and without
       const parts = withoutTag.split("|");
-      const label = parts[0]?.trim();
+      const label = parts[0]?.trim() ?? withoutTag;
       const prompt = parts[1]?.trim() ?? label;
 
-      return {
-        text: label ?? withoutTag,
-        tag,
-        prompt: prompt ?? label ?? withoutTag,
-      };
+      return { text: label, tag, prompt };
     })
     .filter((h) => h.text.length > 0)
     .slice(0, 4);
 }
 
-function stripTagRemnants(text: string): string {
-  return text
-    .replace(/\[FLAG_OPS\][\s\S]*?\[\/FLAG_OPS\]/gi, "") // complete FLAG_OPS blocks
-    .replace(/\[FLAG_OPS\][\s\S]*$/i, "") // FLAG_OPS block with no closing tag
-    .replace(/\[\/?FLAG_OPS\]/gi, "") // any stray FLAG_OPS tags
-    .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/i, "") // HINTS block with closing tag
-    .replace(/\[HINTS\][\s\S]*$/i, "") // HINTS block with no closing tag
-    .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/i, "") // STATUS block with closing tag
-    .replace(/\[STATUS\][\s\S]*$/i, "") // STATUS block with no closing tag
-    .replace(/\[\/?(?:STATUS|HINTS)\]/gi, "") // any stray open/close tags
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
+// ─── Structured Parser ────────────────────────────────────────────────────────
 
 function parseStructured(raw: string): ParsedDMResponse | null {
-  // Only attempt structured parse if we see at least one of our tags
   if (!/\[STATUS\]/i.test(raw) && !/\[HINTS\]/i.test(raw)) return null;
 
-  const { inner: statusBlock, stripped: afterStatus } = parseBlock(
+  const { inner: statusBlock, stripped: afterStatus } = extractBlock(
     raw,
-    TAG_PATTERNS.status,
+    "STATUS",
+    "STATUS",
   );
-  const { inner: hintsBlock, stripped: narrative } = parseBlock(
+  const { inner: hintsBlock, stripped: narrative } = extractBlock(
     afterStatus,
-    TAG_PATTERNS.hints,
+    "HINTS",
+    "HINTS",
   );
 
-  console.log("=== PARSED STRUCTURE ===\n", raw);
-  console.log("Status block:", statusBlock);
-  console.log("Hints block:", hintsBlock);
-  console.log("Narrative:", narrative);
+  if (process.env.NODE_ENV === "development") {
+    console.log("=== PARSED STRUCTURE ===\n", raw);
+    console.log("Status block:", statusBlock);
+    console.log("Hints block:", hintsBlock);
+    console.log("Narrative:", narrative);
+  }
 
   return {
-    narrative: narrative.trim(),
+    narrative: stripStructuredTags(narrative),
     statusItems: parseBullets(statusBlock),
     hints: parseHints(hintsBlock),
   };
 }
 
-// ─── Freeform fallback parser (legacy / LLM drift) ────────────────────────────
+// ─── Freeform Fallback Parser ─────────────────────────────────────────────────
 
 // Patterns the LLM tends to emit when it bleeds state into prose
 const FREEFORM_STATUS_PATTERNS = [
-  // "Combat State: * item * item"  or  "Quest Status: * item"
   /(?:combat\s+state|quest\s+status|situation|summary)\s*:\s*([\s\S]*?)(?:\n\n|$)/gi,
-  // Standalone bullet run of 2+ lines not inside a sentence
   /^(?:[\*\-\•]\s+.+\n?){2,}/gm,
 ];
 
-// Sentences that look like status summaries rather than narrative:
-// - start with "You have", "You've", "The party", "Your quest"
-// - are short (< 120 chars)
-// - end with a period and aren't in the middle of a paragraph
+// Sentences that look like status summaries rather than narrative
 const STATUS_SENTENCE_RE =
   /(?:^|\n)((?:You(?:'ve| have| are| were)| The (?:party|group|Redbrands?|goblins?)|Your (?:quest|goal|mission)|Currently)[^.!?]{10,100}[.!?])/g;
 
@@ -138,22 +149,16 @@ function extractFreeformStatus(raw: string): {
   // Pass 1 — labeled blocks like "Combat State: * foo * bar"
   for (const pattern of FREEFORM_STATUS_PATTERNS) {
     cleaned = cleaned.replace(pattern, (match, group) => {
-      if (group) {
-        parseBullets(group).forEach((b) => items.push(b));
-        return "";
-      }
-      // Standalone bullet run
-      parseBullets(match).forEach((b) => items.push(b));
+      parseBullets(group ?? match).forEach((b) => items.push(b));
       return "";
     });
   }
 
-  // Pass 2 — status-flavored sentences at paragraph boundaries
-  // Only extract if we didn't already find structured items,
-  // to avoid cannibalising real narrative
+  // Pass 2 — status-flavored sentences at paragraph boundaries.
+  // Only extract if we didn't already find structured items, to avoid
+  // cannibalising real narrative. Also requires 2+ matches.
   if (items.length === 0) {
     const sentenceMatches = [...raw.matchAll(STATUS_SENTENCE_RE)];
-    // Only pull them out if there are 2+ — a single one is probably just narrative
     if (sentenceMatches.length >= 2) {
       sentenceMatches.forEach((m) => {
         items.push(m[1].trim());
@@ -163,7 +168,7 @@ function extractFreeformStatus(raw: string): {
   }
 
   return {
-    statusItems: [...new Set(items)].slice(0, 5), // dedup, cap at 5
+    statusItems: [...new Set(items)].slice(0, 5),
     cleaned: cleaned.replace(/\n{3,}/g, "\n\n").trim(),
   };
 }
@@ -174,42 +179,34 @@ export function parseDMResponse(raw: string): ParsedDMResponse {
   if (process.env.NODE_ENV === "development" && raw.trim()) {
     console.log("=== RAW DM RESPONSE ===\n", raw);
   }
-  // Try structured first — clean, reliable
-  const structured = parseStructured(raw);
-  if (structured)
-    return {
-      ...structured,
-      narrative: stripTagRemnants(structured.narrative),
-    };
 
-  // Fall back to heuristic extraction for free-form / legacy messages
+  const structured = parseStructured(raw);
+  if (structured) return structured;
+
   const { statusItems, cleaned } = extractFreeformStatus(raw);
-  return {
-    narrative: cleaned,
-    statusItems,
-    hints: [], // can't reliably extract hints from free-form prose
-  };
+  return { narrative: cleaned, statusItems, hints: [] };
 }
 
-// Safe to call mid-stream — narrative renders live, tags resolve once closed
+/**
+ * Safe to call mid-stream. Renders narrative live while tags are still
+ * accumulating; resolves STATUS and HINTS once their blocks are closed.
+ *
+ * Strategy: split the raw stream at the first structured tag boundary so the
+ * narrative portion renders cleanly without tag noise, then let the full
+ * parseDMResponse resolve STATUS/HINTS from whatever has arrived so far.
+ */
 export function parseDMResponsePartial(raw: string): ParsedDMResponse {
-  const firstTag = Math.min(
-    ...[raw.indexOf("[STATUS]"), raw.indexOf("[HINTS]")].map((i) =>
-      i === -1 ? Infinity : i,
-    ),
-  );
-
-  const narrative = firstTag === Infinity ? raw : raw.slice(0, firstTag).trim();
+  const tagStart = raw.search(FIRST_STRUCTURED_TAG_RE);
+  const narrative = tagStart === -1 ? raw : raw.slice(0, tagStart).trim();
   const full = parseDMResponse(raw);
-
   return { ...full, narrative };
 }
 
-export const getCleanNarrativeForSpeech = (text: string): string => {
+export function getCleanNarrativeForSpeech(text: string): string {
   return text
     .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/g, "")
     .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/g, "")
     .replace(/\[ROLL:.*?\]/g, "")
     .replace(/\*.*?\*/g, "")
     .trim();
-};
+}
