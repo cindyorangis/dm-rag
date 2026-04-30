@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CombatState, Combatant } from "@/lib/combat/types";
-import type { DeathResolutionType } from "@/lib/combat/types";
+import type { SupabaseAdminClient } from "@/lib/supabase";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildDMSystemPrompt } from "@/lib/dm-prompt";
 import { getCombatState, upsertCombatState } from "@/lib/combat/repository";
@@ -38,13 +37,23 @@ import {
   stripNarrativeFlagOpsBlocks,
 } from "@/lib/narrative/flags";
 
+// Constants
+const DEFAULT_PLAYER = {
+  name: "Adventurer",
+  hp: 10,
+  ac: 12,
+  dexMod: 0,
+};
+
+const DEFAULT_ADVENTURE_SLUG = "lost-mine-of-phandelver";
+
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
   const conversationHistory = Array.isArray(history) ? history : [];
-  const supabase = supabaseAdmin;
+  const supabase: SupabaseAdminClient = supabaseAdmin;
   const llmProvider = getLlmProvider();
 
-  // 1. Load session — grab adventure_slug and narrative_flags in one query
+  // 1. Load session
   const { data: sessionRow } = await supabase
     .from("sessions")
     .select("narrative_flags, adventure_slug, character_context")
@@ -53,16 +62,16 @@ export async function POST(req: NextRequest) {
 
   const narrativeFlags = sanitizeNarrativeFlags(sessionRow?.narrative_flags);
   const adventureSlug: string =
-    sessionRow?.adventure_slug ?? "lost-mine-of-phandelver";
+    sessionRow?.adventure_slug ?? DEFAULT_ADVENTURE_SLUG;
 
-  // 2. Embed the player message and retrieve chunks scoped to this adventure
+  // 2. Embed and retrieve chunks
   const chunks = await retrieveChunks(message, adventureSlug);
   const retrievedChunks = chunks.map((c: { content: string }) => c.content);
 
-  // 3. Load current combat state from Supabase
+  // 3. Load current combat state
   let combatState = await getCombatState(sessionId);
 
-  // 4. Build the DM system prompt with combat state and adventure context
+  // 4. Build DM system prompt
   const systemPrompt = buildDMSystemPrompt({
     retrievedChunks,
     combatState,
@@ -71,10 +80,10 @@ export async function POST(req: NextRequest) {
     characterContext: sessionRow?.character_context ?? null,
   });
 
-  // 5. Build messages array for the LLM
+  // 5. Build messages array
   const messages = [...conversationHistory, { role: "user", content: message }];
 
-  // 6. Call provider-backed LLM (streaming)
+  // 6. Call LLM
   const llmRes = await createLlmChatStream({
     provider: llmProvider,
     systemPrompt,
@@ -86,7 +95,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error }, { status: 500 });
   }
 
-  // 7. Stream response back to client, collect full text for post-processing
+  // 7. Stream response
   const encoder = new TextEncoder();
   let fullResponse = "";
 
@@ -168,17 +177,16 @@ export async function POST(req: NextRequest) {
 
       const dmResponseForState = stripNarrativeFlagOpsBlocks(fullResponse);
 
-      // 8. Post-stream: update combat state based on DM response
+      // 8. Post-stream: update combat state
       combatState = await processCombatStateUpdate({
         sessionId,
         playerMessage: message,
         dmResponse: dmResponseForState,
         combatState,
         characterContext: sessionRow?.character_context ?? null,
-        supabase,
       });
 
-      // 9. Persist narrative flags if the DM emitted operations
+      // 9. Persist narrative flags
       await updateNarrativeFlagsFromDmResponse({
         sessionId,
         dmResponse: fullResponse,
@@ -195,7 +203,7 @@ export async function POST(req: NextRequest) {
         },
       ]);
 
-      // 11. Signal the frontend whether initiative is needed
+      // 11. Signal frontend
       controller.enqueue(
         encoder.encode(
           `data: ${JSON.stringify({
@@ -224,7 +232,7 @@ async function updateNarrativeFlagsFromDmResponse({
 }: {
   sessionId: string;
   dmResponse: string;
-  supabase: SupabaseClient;
+  supabase: SupabaseAdminClient;
 }) {
   const ops = parseNarrativeFlagOpsFromText(dmResponse);
   if (!ops) return;
@@ -244,26 +252,20 @@ async function updateNarrativeFlagsFromDmResponse({
     .eq("id", sessionId);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Combat state post-processing
-// ─────────────────────────────────────────────────────────────────────────────
-
 async function processCombatStateUpdate({
   sessionId,
   playerMessage,
   dmResponse,
   combatState,
   characterContext,
-  supabase,
 }: {
   sessionId: string;
   playerMessage: string;
   dmResponse: string;
   combatState: CombatState | null;
   characterContext: string | null;
-  supabase: SupabaseClient;
 }): Promise<CombatState | null> {
-  // ── Mark deathResolution as applied after DM has narrated it ────────────
+  // Mark deathResolution as applied
   if (combatState?.deathResolution && !combatState.deathResolution.applied) {
     combatState = {
       ...combatState,
@@ -273,10 +275,9 @@ async function processCombatStateUpdate({
     return combatState;
   }
 
-  // ── Case 1: Combat just started ──────────────────────────────────────────
+  // Case 1: Combat just started
   if (!combatState?.is_active && detectCombatStart(playerMessage, dmResponse)) {
     const playerCombatant = buildPlayerCombatant(characterContext);
-
     const encounterKey = detectEncounterKey(playerMessage, dmResponse);
     const monsters = buildEncounterMonstersOnly(encounterKey);
     const monstersWithInitiative = rollAllInitiatives(monsters);
@@ -307,22 +308,25 @@ async function processCombatStateUpdate({
     return newState;
   }
 
-  // ── Not in combat ────────────────────────────────────────────────────────
+  // Not in combat
   if (!combatState?.is_active) return null;
 
-  // ── Still waiting for player initiative — don't advance ─────────────────
+  // Still waiting for player initiative
   if (combatState.awaiting_player_initiative) return combatState;
 
-  // ── Case 2: Combat ongoing — parse damage and advance turn ───────────────
+  // Case 2: Combat ongoing
   let state = { ...combatState };
 
   const damageEvents = parseDamageFromNarrative(dmResponse);
+
+  // Create a Map for O(1) lookup
+  const combatantMap = new Map<string, Combatant>();
+  state.combatants.forEach((c) => combatantMap.set(c.id, c));
+
   for (const event of damageEvents) {
-    const target = state.combatants.find(
-      (c) =>
-        c.name.toLowerCase().includes(event.targetName.toLowerCase()) ||
-        (event.targetName === "player" && c.type === "player"),
-    );
+    // event.targetName is "player" or monster name (e.g., "goblin")
+    const target =
+      combatantMap.get(event.targetName) || combatantMap.get("player");
     if (target) {
       state = applyDamage(state, target.id, event.amount);
       state = appendLog(state, {
@@ -359,7 +363,7 @@ async function processCombatStateUpdate({
     });
   }
 
-  // ── Case 3: Combat ended ─────────────────────────────────────────────────
+  // Case 3: Combat ended
   if (detectCombatEnd(dmResponse)) {
     state = endCombat(state);
     state = appendLog(state, {
@@ -377,41 +381,56 @@ async function processCombatStateUpdate({
   return state;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Build a player Combatant from the character_context string
-// ─────────────────────────────────────────────────────────────────────────────
-
 function buildPlayerCombatant(
   characterContext: string | null | undefined,
 ): Omit<Combatant, "initiative"> {
-  let name = "Adventurer";
-  let hp = 10;
-  let ac = 12;
-  let dexMod = 0;
+  const defaults = { ...DEFAULT_PLAYER };
 
   if (characterContext) {
-    const nameMatch = characterContext.match(/Name:\s*(.+)/);
-    if (nameMatch) name = nameMatch[1].trim();
-
-    const hpMatch = characterContext.match(/HP:\s*(\d+)/);
-    if (hpMatch) hp = parseInt(hpMatch[1]);
-
-    const acMatch = characterContext.match(/AC:\s*(\d+)/);
-    if (acMatch) ac = parseInt(acMatch[1]);
-
-    const dexMatch = characterContext.match(/DEX\s+(\d+)/i);
-    if (dexMatch) dexMod = Math.floor((parseInt(dexMatch[1]) - 10) / 2);
+    const parsed = parseCharacterContext(characterContext);
+    defaults.name = parsed.name ?? defaults.name;
+    defaults.hp = parsed.hp ?? defaults.hp;
+    defaults.ac = parsed.ac ?? defaults.ac;
+    defaults.dexMod = parsed.dexMod ?? defaults.dexMod;
   }
 
   return {
     id: uuidv4(),
-    name,
+    name: defaults.name,
     type: "player",
-    hp,
-    max_hp: hp,
-    ac,
-    initiative_mod: dexMod,
+    hp: defaults.hp,
+    max_hp: defaults.hp,
+    ac: defaults.ac,
+    initiative_mod: defaults.dexMod,
     conditions: [],
     is_alive: true,
   };
+}
+
+function parseCharacterContext(context: string): {
+  name?: string;
+  hp?: number;
+  ac?: number;
+  dexMod?: number;
+} {
+  const result: {
+    name?: string;
+    hp?: number;
+    ac?: number;
+    dexMod?: number;
+  } = {};
+
+  const nameMatch = context.match(/Name:\s*(.+)/);
+  if (nameMatch) result.name = nameMatch[1].trim();
+
+  const hpMatch = context.match(/HP:\s*(\d+)/);
+  if (hpMatch) result.hp = parseInt(hpMatch[1]);
+
+  const acMatch = context.match(/AC:\s*(\d+)/);
+  if (acMatch) result.ac = parseInt(acMatch[1]);
+
+  const dexMatch = context.match(/DEX\s+(\d+)/i);
+  if (dexMatch) result.dexMod = Math.floor((parseInt(dexMatch[1]) - 10) / 2);
+
+  return result;
 }

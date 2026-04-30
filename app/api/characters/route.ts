@@ -33,20 +33,21 @@ export async function GET(request: Request) {
 
   if (error) {
     return NextResponse.json(
-      { 
+      {
         error: error.message,
-        details: process.env.NODE_ENV === "development" ? error.details : undefined 
-      }, 
-      { status: 500 }
+        details:
+          process.env.NODE_ENV === "development" ? error.details : undefined,
+      },
+      { status: 500 },
     );
   }
 
-  return NextResponse.json({ 
+  return NextResponse.json({
     characters: data,
     pagination: {
       page,
       limit,
-      total: data.length
-    }
+      total: data.length,
+    },
   });
 }
