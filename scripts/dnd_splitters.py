@@ -202,7 +202,7 @@ class DndTextSplitter:
 
     def split_text(self, text: str) -> list[str]:
         # Pass 1 — split on D&D section headers
-        raw_sections = _SECTION_HEADER_RE.split(text)
+        raw_sections = re.split(r"(?=^#{1,3}\s)", text, flags=re.MULTILINE)
         sections = [s.strip() for s in raw_sections if s and s.strip()]
 
         # Pass 2 — recursively split any section still over the size limit
@@ -311,6 +311,28 @@ _CELL_MARKER_RE = re.compile(r"^[*_#\-]+|[*_#\-]+$")
 # Normalises a header string to a dict key
 def _normalise_key(header: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", header.lower()).strip("_")
+
+
+def html_tables_to_markdown(text: str) -> str:
+    """Convert HTML tables to Markdown so TableSplitter can handle them."""
+    import re
+
+    def convert_table(m):
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(0), re.DOTALL | re.IGNORECASE)
+        md_rows = []
+        for i, row in enumerate(rows):
+            cells = re.findall(
+                r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.DOTALL | re.IGNORECASE
+            )
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+            md_rows.append("| " + " | ".join(cells) + " |")
+            if i == 0:
+                md_rows.append("| " + " | ".join(["---"] * len(cells)) + " |")
+        return "\n".join(md_rows)
+
+    return re.compile(r"<table[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE).sub(
+        convert_table, text
+    )
 
 
 def parse_dnd_tables(text: str, table_name: str = "") -> list[DndTable]:

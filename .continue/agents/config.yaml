@@ -24,9 +24,9 @@ models:
     defaultCompletionOptions:
       contextLength: 128000
 
-  - name: nomic-embed-text Embed
+  - name: mxbai-embed-large Embed
     provider: ollama
-    model: nomic-embed-text:latest
+    model: mxbai-embed-large:latest
     roles:
       - embed
 
