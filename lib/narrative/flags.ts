@@ -7,7 +7,7 @@ export interface NarrativeFlagOps {
   inc?: Record<string, number>;
 }
 
-const FLAG_KEY_RE = /^[a-z0-9_]{2,64}$/;
+const FLAG_KEY_RE = /^[a-z0-9_]{1,64}$/;
 const FLAG_BLOCK_RE = /\[FLAG_OPS\]([\s\S]*?)\[\/FLAG_OPS\]/gi;
 
 function isNarrativeFlagValue(value: unknown): value is NarrativeFlagValue {
@@ -42,13 +42,19 @@ export function sanitizeNarrativeFlags(input: unknown): NarrativeFlags {
 export function parseNarrativeFlagOpsFromText(
   raw: string,
 ): NarrativeFlagOps | null {
-  // Strip potential markdown code block markers that LLMs might add
-  const cleaned = raw.replace(/```(json|javascript|js|text)?```/g, "").trim();
-  const matches = Array.from(cleaned.matchAll(FLAG_BLOCK_RE));
+  // 1. Find all [FLAG_OPS] blocks
+  const matches = Array.from(raw.matchAll(FLAG_BLOCK_RE));
   if (matches.length === 0) return null;
 
-  const latest = matches[matches.length - 1][1]?.trim();
+  // 2. Get content of the latest block
+  let latest = matches[matches.length - 1][1]?.trim();
   if (!latest) return null;
+
+  // 3. Robustly strip markdown code blocks from the JSON content
+  latest = latest
+    .replace(/```(?:json|javascript|js|text)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
 
   try {
     const parsed = JSON.parse(latest) as NarrativeFlagOps;

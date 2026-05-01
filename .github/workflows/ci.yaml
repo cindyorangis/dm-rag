@@ -54,8 +54,3 @@ jobs:
       # 8. Build the Next.js app to ensure it compiles without errors
       - name: Build Next.js App
         run: npm run build
-        # If your Next.js build requires Supabase environment variables to compile successfully,
-        # you need to mock them here or add them to your GitHub Repository Secrets.
-        # env:
-        #   NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-        #   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
