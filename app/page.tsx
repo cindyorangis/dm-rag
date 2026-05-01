@@ -6,7 +6,50 @@ import { useRouter } from "next/navigation";
 import CharacterCard from "@/components/CharacterCard";
 import { PremadeCharacter } from "./page.types";
 
-type Screen = "home" | "character";
+type Screen = "home" | "adventure" | "character";
+
+interface Adventure {
+  slug: string;
+  title: string;
+  subtitle: string;
+  setting: string;
+  levels: string;
+  description: string;
+  available: boolean;
+}
+
+const ADVENTURES: Adventure[] = [
+  {
+    slug: "lost-mine-of-phandelver",
+    title: "Lost Mine of Phandelver",
+    subtitle: "The Forgotten Realms",
+    setting: "Phandalin, Forgotten Realms",
+    levels: "Levels 1–5",
+    description:
+      "A mysterious map. A missing dwarf. The road to Phandalin winds through goblin-haunted forest and into the depths of Wave Echo Cave.",
+    available: true,
+  },
+  {
+    slug: "ghosts-of-saltmarsh",
+    title: "Ghosts of Saltmarsh",
+    subtitle: "The Azure Sea",
+    setting: "Saltmarsh, Greyhawk",
+    levels: "Levels 1–12",
+    description:
+      "A haunted manor. A seaside town on edge. Dark tides are rising off the coast of Saltmarsh, and only you can uncover what lurks beneath the waves.",
+    available: true,
+  },
+  {
+    slug: "tales-from-the-yawning-portal",
+    title: "Tales from the Yawning Portal",
+    subtitle: "Waterdeep & Beyond",
+    setting: "Waterdeep + various",
+    levels: "Levels 1–15",
+    description:
+      "Seven classic dungeons. Countless legends. Descend into the deadliest adventures ever told, from the sunken Tomb of Horrors to the White Plume Mountain.",
+    available: false,
+  },
+];
 
 function buildCharacterContextFromDB(c: PremadeCharacter): string {
   const parts: string[] = [];
@@ -48,6 +91,9 @@ function buildCharacterContextFromDB(c: PremadeCharacter): string {
 export default function HomePage() {
   const router = useRouter();
   const [screen, setScreen] = useState<Screen>("home");
+  const [selectedAdventure, setSelectedAdventure] = useState<Adventure | null>(
+    null,
+  );
   const [premadeChars, setPremadeChars] = useState<PremadeCharacter[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loadingChars, setLoadingChars] = useState(false);
@@ -60,6 +106,7 @@ export default function HomePage() {
   useEffect(() => {
     if (screen !== "character") return;
 
+    setLoadingChars(true);
     fetch("/api/characters")
       .then((r) => r.json())
       .then(({ characters }) => {
@@ -70,7 +117,7 @@ export default function HomePage() {
   }, [screen]);
 
   const startAdventure = async (character: PremadeCharacter) => {
-    if (isCreating) return;
+    if (isCreating || !selectedAdventure) return;
     setCreatingCharacterId(character.id);
     setIsCreating(true);
     setError(null);
@@ -80,6 +127,7 @@ export default function HomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          adventureSlug: selectedAdventure.slug,
           characterContext: buildCharacterContextFromDB(character),
         }),
       });
@@ -97,7 +145,6 @@ export default function HomePage() {
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const filteredChars = premadeChars.filter((char) => {
     if (!normalizedSearch) return true;
-
     const searchable = [
       char.name,
       char.class,
@@ -108,10 +155,10 @@ export default function HomePage() {
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
-
     return searchable.includes(normalizedSearch);
   });
 
+  // ── Home screen ──────────────────────────────────────────────────────────
   if (screen === "home") {
     return (
       <main
@@ -136,7 +183,7 @@ export default function HomePage() {
               The Dungeon Master
             </h1>
             <p className="mt-1 text-xs uppercase tracking-[0.28em] text-amber-300/90">
-              Lost Mine of Phandelver
+              Solo Adventure Awaits
             </p>
           </div>
 
@@ -147,21 +194,18 @@ export default function HomePage() {
           </div>
 
           <p className="px-4 font-serif text-lg leading-relaxed text-amber-100 italic">
-            You stand at the edge of Neverwinter Wood.
+            No DM required. No group needed.
             <br />
-            The road to Phandalin lies ahead.
+            Just you, the dice, and the world.
             <br />
             Your destiny awaits.
           </p>
 
           <button
             onClick={() => {
-              setLoadingChars(true);
-              setIsCreating(false);
-              setCreatingCharacterId(null);
+              setSelectedAdventure(null);
               setError(null);
-              setSearchQuery("");
-              setScreen("character");
+              setScreen("adventure");
             }}
             className="w-full rounded border border-amber-700/60 bg-gradient-to-br from-amber-900 to-amber-800 py-4 font-serif text-lg tracking-[0.12em] text-white shadow-lg shadow-amber-950/50 transition-all hover:from-amber-800 hover:to-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
           >
@@ -179,6 +223,81 @@ export default function HomePage() {
     );
   }
 
+  // ── Adventure selection screen ────────────────────────────────────────────
+  if (screen === "adventure") {
+    return (
+      <main
+        className="min-h-screen bg-stone-950 text-amber-100 flex flex-col items-center justify-start px-4 py-10"
+        style={{
+          background:
+            "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(120,70,15,0.12) 0%, #0d0a07 70%)",
+        }}
+      >
+        <div className="w-full max-w-4xl space-y-6">
+          <div className="text-center space-y-2">
+            <h2 className="font-serif text-3xl tracking-[0.14em] text-amber-100">
+              Choose Your Adventure
+            </h2>
+            <p className="font-serif text-lg text-amber-200/90 italic">
+              Select a module to begin your campaign.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {ADVENTURES.map((adv) => (
+              <button
+                key={adv.slug}
+                disabled={!adv.available}
+                onClick={() => {
+                  setSelectedAdventure(adv);
+                  setIsCreating(false);
+                  setCreatingCharacterId(null);
+                  setError(null);
+                  setSearchQuery("");
+                  setScreen("character");
+                }}
+                className={[
+                  "relative text-left rounded-lg border p-5 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300",
+                  adv.available
+                    ? "border-amber-700/50 bg-black/30 hover:border-amber-500/70 hover:bg-amber-950/30 cursor-pointer"
+                    : "border-amber-900/30 bg-black/15 opacity-50 cursor-not-allowed",
+                ].join(" ")}
+              >
+                {!adv.available && (
+                  <span className="absolute top-3 right-3 text-[10px] uppercase tracking-widest text-amber-500/60 font-sans border border-amber-800/40 rounded px-1.5 py-0.5">
+                    Coming Soon
+                  </span>
+                )}
+                <p className="font-serif text-xs uppercase tracking-[0.2em] text-amber-400/70 mb-1">
+                  {adv.levels}
+                </p>
+                <h3 className="font-serif text-xl text-amber-200 leading-snug mb-2">
+                  {adv.title}
+                </h3>
+                <p className="text-xs text-amber-300/60 font-sans mb-3">
+                  {adv.setting}
+                </p>
+                <p className="font-serif text-sm text-amber-100/75 italic leading-relaxed">
+                  {adv.description}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          <div className="text-center">
+            <button
+              onClick={() => setScreen("home")}
+              className="font-serif italic text-amber-300/60 hover:text-amber-300 transition-colors text-sm"
+            >
+              ← Back
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ── Character selection screen ────────────────────────────────────────────
   return (
     <main
       className="min-h-screen bg-stone-950 text-amber-100 flex flex-col items-center justify-start px-4 py-10"
@@ -189,6 +308,11 @@ export default function HomePage() {
     >
       <div className="w-full max-w-6xl space-y-6">
         <div className="mb-1 px-2 text-center">
+          {selectedAdventure && (
+            <p className="font-serif text-xs uppercase tracking-[0.22em] text-amber-400/70 mb-1">
+              {selectedAdventure.title}
+            </p>
+          )}
           <h2 className="font-serif text-3xl tracking-[0.14em] text-amber-100">
             Choose Your Hero
           </h2>
@@ -256,6 +380,17 @@ export default function HomePage() {
           <p className="text-center font-serif text-base text-amber-200/90 italic">
             Opening your adventure...
           </p>
+        )}
+
+        {!isCreating && (
+          <div className="text-center">
+            <button
+              onClick={() => setScreen("adventure")}
+              className="font-serif italic text-amber-300/60 hover:text-amber-300 transition-colors text-sm"
+            >
+              ← Back to adventures
+            </button>
+          </div>
         )}
       </div>
     </main>
