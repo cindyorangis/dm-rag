@@ -22,3 +22,5 @@ export const supabaseAdmin = (
       })
     : null
 ) as SupabaseClient;
+
+export type supabaseAdminType = typeof supabaseAdmin;

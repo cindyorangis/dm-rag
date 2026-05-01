@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { supabaseAdminType } from "@/lib/supabase";
 import type { CombatState, Combatant } from "@/lib/combat/types";
 import { supabaseAdmin } from "@/lib/supabase";
 import { buildDMSystemPrompt } from "@/lib/dm-prompt";
@@ -231,7 +232,7 @@ async function updateNarrativeFlagsFromDmResponse({
 }: {
   sessionId: string;
   dmResponse: string;
-  supabase: ReturnType<typeof supabaseAdmin>;
+  supabase: supabaseAdminType;
 }) {
   const ops = parseNarrativeFlagOpsFromText(dmResponse);
   if (!ops) return;
