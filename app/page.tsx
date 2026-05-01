@@ -96,7 +96,7 @@ export default function HomePage() {
   );
   const [premadeChars, setPremadeChars] = useState<PremadeCharacter[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [loadingChars, setLoadingChars] = useState(false);
+  const [loadingChars, setLoadingChars] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [creatingCharacterId, setCreatingCharacterId] = useState<string | null>(
     null,
@@ -106,7 +106,6 @@ export default function HomePage() {
   useEffect(() => {
     if (screen !== "character") return;
 
-    setLoadingChars(true);
     fetch("/api/characters")
       .then((r) => r.json())
       .then(({ characters }) => {
