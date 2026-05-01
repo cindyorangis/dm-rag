@@ -302,7 +302,14 @@ export function buildDMSystemPrompt({
   // narrative directive before it sees turn-order rules
   if (combatState?.deathResolution && !combatState.deathResolution.applied) {
     const script = DEATH_RESOLUTION_SCRIPTS[combatState.deathResolution.type];
-    if (script) sections.push(`\n${script}\n`);
+    if (script) {
+      sections.push(`\n--- SPECIAL CIRCUMSTANCE ---\n${script}\n`);
+    } else {
+      // Helpful for debugging if a script is missing from the config
+      console.warn(
+        `Missing death resolution script for: ${combatState.deathResolution.type}`,
+      );
+    }
   }
 
   // Combat turn instructions
