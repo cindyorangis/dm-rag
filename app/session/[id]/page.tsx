@@ -184,7 +184,7 @@ export default function SessionPage() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-stone-950 text-stone-100">
+    <div className="flex h-[100dvh] overflow-hidden overflow-x-hidden bg-stone-950 text-stone-100">
       {/* ── Chat column ────────────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
@@ -282,7 +282,7 @@ export default function SessionPage() {
           ) : (
             <div className="mx-auto flex max-w-3xl items-end gap-2 md:gap-3">
               <textarea
-                className="flex-1 resize-none rounded-lg border border-stone-600 bg-stone-900 px-3 py-2.5 text-sm text-stone-100 placeholder-stone-400 focus:border-amber-400 focus:outline-none md:px-4 md:py-3 md:text-base"
+                className="flex-1 resize-none rounded-lg border border-stone-600 bg-stone-900 px-3 py-2.5 text-base text-stone-100 placeholder-stone-400 focus:border-amber-400 focus:outline-none md:px-4 md:py-3"
                 rows={2}
                 placeholder="What do you do?"
                 value={input}
