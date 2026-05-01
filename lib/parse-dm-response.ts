@@ -19,9 +19,13 @@ const HINT_TAG_MAP: Record<string, HintItem["tag"]> = {
   lore: "lore",
 };
 
-// Matches any of our known structured tags — used to find where narrative ends
-// during streaming before the blocks are fully closed.
-const FIRST_STRUCTURED_TAG_RE = /\[(?:STATUS|HINTS|FLAG_OPS)\]/i;
+/**
+ * Matches the *start* of any known structured tag — including partial tokens
+ * like "[STA", "[HIN", "[FLAG" that arrive mid-stream before the tag closes.
+ * Uses a lookahead so it matches at the `[` boundary regardless of what
+ * follows (including complete tags like `[FLAG_OPS]` with their closing `]`).
+ */
+const FIRST_STRUCTURED_TAG_RE = /\[(?=(?:STATUS|HINTS|FLAG_OPS|STA|HIN|FLAG))/i;
 
 // ─── Strip Helpers ────────────────────────────────────────────────────────────
 
@@ -35,14 +39,12 @@ function stripStructuredTags(text: string): string {
     text
       // Complete blocks
       .replace(/\[FLAG_OPS\][\s\S]*?\[\/FLAG_OPS\]/gi, "")
-      .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/i, "")
-      .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/i, "")
-      // Open-ended blocks (stream not yet closed)
-      .replace(/\[FLAG_OPS\][\s\S]*$/i, "")
-      .replace(/\[HINTS\][\s\S]*$/i, "")
-      .replace(/\[STATUS\][\s\S]*$/i, "")
-      // Stray open/close tags with no content
-      .replace(/\[\/?(?:STATUS|HINTS|FLAG_OPS)\]/gi, "")
+      .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/gi, "")
+      .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/gi, "")
+      // Open-ended / partial blocks still accumulating
+      .replace(/\[(?:STATUS|HINTS|FLAG_OPS)[^\]]*[\s\S]*$/gi, "")
+      // Stray partial tag noise like "[STA" at end of string
+      .replace(/\[(?:STA|HIN|FLAG)[^\]]*$/gi, "")
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
@@ -70,7 +72,7 @@ function parseBullets(block: string): string[] {
   if (!block) return [];
   return block
     .split("\n")
-    .map((line) => line.replace(/^[\*\-\•]\s*/, "").trim())
+    .map((line) => line.replace(/^[*\-•]\s*/, "").trim())
     .filter(Boolean);
 }
 
@@ -129,15 +131,14 @@ function parseStructured(raw: string): ParsedDMResponse | null {
 
 // ─── Freeform Fallback Parser ─────────────────────────────────────────────────
 
-// Patterns the LLM tends to emit when it bleeds state into prose
-const FREEFORM_STATUS_PATTERNS = [
-  /(?:combat\s+state|quest\s+status|situation|summary)\s*:\s*([\s\S]*?)(?:\n\n|$)/gi,
-  /^(?:[\*\-\•]\s+.+\n?){2,}/gm,
-];
-
-// Sentences that look like status summaries rather than narrative
+/**
+ * Sentences that read like status summaries rather than narrative prose.
+ * Note: No `(?:^|\n)` anchor — these can appear anywhere in a paragraph,
+ * e.g. "The Redbrands are watching you. You have arrived at the inn."
+ * The `The ` branch has no leading space so it captures from the first char.
+ */
 const STATUS_SENTENCE_RE =
-  /(?:^|\n)((?:You(?:'ve| have| are| were)| The (?:party|group|Redbrands?|goblins?)|Your (?:quest|goal|mission)|Currently)[^.!?]{10,100}[.!?])/g;
+  /((?:You(?:'ve| have| are| were)|The (?:party|group|Redbrands?|goblins?)|Your (?:quest|goal|mission)|Currently)[^.!?]{10,100}[.!?])/g;
 
 function extractFreeformStatus(raw: string): {
   statusItems: string[];
@@ -146,24 +147,24 @@ function extractFreeformStatus(raw: string): {
   const items: string[] = [];
   let cleaned = raw;
 
-  // Pass 1 — labeled blocks like "Combat State: * foo * bar"
-  for (const pattern of FREEFORM_STATUS_PATTERNS) {
-    cleaned = cleaned.replace(pattern, (match, group) => {
-      parseBullets(group ?? match).forEach((b) => items.push(b));
+  // Pass 1: Explicit bullets — strip and collect
+  cleaned = cleaned.replace(
+    /(?:^|\n)\s*[*\-•]\s*(.+)/g,
+    (_match, content: string) => {
+      items.push(content.trim());
       return "";
-    });
-  }
+    },
+  );
 
-  // Pass 2 — status-flavored sentences at paragraph boundaries.
-  // Only extract if we didn't already find structured items, to avoid
-  // cannibalising real narrative. Also requires 2+ matches.
+  // Pass 2: Status-flavored sentences (no bullets found)
+  // Requires 2+ matches to avoid cannibalizing narrative sentences
   if (items.length === 0) {
-    const sentenceMatches = [...raw.matchAll(STATUS_SENTENCE_RE)];
-    if (sentenceMatches.length >= 2) {
-      sentenceMatches.forEach((m) => {
+    const matches = Array.from(raw.matchAll(STATUS_SENTENCE_RE));
+    if (matches.length >= 2) {
+      for (const m of matches) {
         items.push(m[1].trim());
         cleaned = cleaned.replace(m[1], "");
-      });
+      }
     }
   }
 
@@ -188,25 +189,28 @@ export function parseDMResponse(raw: string): ParsedDMResponse {
 }
 
 /**
- * Safe to call mid-stream. Renders narrative live while tags are still
- * accumulating; resolves STATUS and HINTS once their blocks are closed.
+ * Safe to call mid-stream. Renders narrative live while structured tag blocks
+ * are still accumulating; resolves STATUS and HINTS once their blocks close.
  *
- * Strategy: split the raw stream at the first structured tag boundary so the
- * narrative portion renders cleanly without tag noise, then let the full
- * parseDMResponse resolve STATUS/HINTS from whatever has arrived so far.
+ * Strategy: split at the first structured-tag boundary (including partial
+ * tokens like "[STA") so the narrative portion renders cleanly without noise,
+ * then let parseDMResponse resolve STATUS/HINTS from whatever has arrived.
  */
 export function parseDMResponsePartial(raw: string): ParsedDMResponse {
   const tagStart = raw.search(FIRST_STRUCTURED_TAG_RE);
-  const narrative = tagStart === -1 ? raw : raw.slice(0, tagStart).trim();
-  const full = parseDMResponse(raw);
-  return { ...full, narrative };
+  if (tagStart !== -1) {
+    const narrative = raw.slice(0, tagStart).trim();
+    const full = parseDMResponse(raw);
+    return { ...full, narrative };
+  }
+  return parseDMResponse(raw);
 }
 
 export function getCleanNarrativeForSpeech(text: string): string {
   return text
     .replace(/\[STATUS\][\s\S]*?\[\/STATUS\]/g, "")
     .replace(/\[HINTS\][\s\S]*?\[\/HINTS\]/g, "")
-    .replace(/\[ROLL:.*?\]/g, "")
-    .replace(/\*.*?\*/g, "")
+    .replace(/\[ROLL:[^\]]*\]/g, "")
+    .replace(/\*/g, "")
     .trim();
 }
