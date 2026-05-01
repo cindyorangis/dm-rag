@@ -43,7 +43,7 @@ const createSupabaseMock = () => {
     order: vi.fn().mockReturnThis(),
     single: vi.fn(),
     // Allow the chain itself to be awaited (for naked inserts without select/single)
-    then: vi.fn((resolve) => resolve({ data: null, error: null })),
+    then: vi.fn((resolve: (value: unknown) => void) => resolve({ data: null, error: null })),
   };
   return chain;
 };
@@ -56,7 +56,8 @@ describe("Session Service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDb = createSupabaseMock();
-    vi.mocked(supabaseAdmin.from).mockReturnValue(mockDb as any);
+    // Use `unknown` then `ReturnType` to bypass the `any` requirement safely
+    vi.mocked(supabaseAdmin.from).mockReturnValue(mockDb as unknown as ReturnType<typeof supabaseAdmin.from>);
   });
 
   describe("generateOpeningMessage", () => {
@@ -108,7 +109,7 @@ describe("Session Service", () => {
       });
 
       // Mock message insertion (naked await)
-      mockDb.then.mockImplementationOnce((resolve: any) =>
+      mockDb.then.mockImplementationOnce((resolve: (value: unknown) => void) =>
         resolve({ data: null, error: null }),
       );
 
@@ -155,7 +156,7 @@ describe("Session Service", () => {
         error: null,
       });
 
-      mockDb.then.mockImplementationOnce((resolve: any) =>
+      mockDb.then.mockImplementationOnce((resolve: (value: unknown) => void) =>
         resolve({ error: { message: "Failed to save message" } }),
       );
 
