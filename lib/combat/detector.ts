@@ -49,13 +49,20 @@ export interface ParsedDamageEvent {
 export function parseDamageFromNarrative(text: string): ParsedDamageEvent[] {
   const events: ParsedDamageEvent[] = [];
 
-  // Pattern: "<name> takes <N> damage" or "<name> takes <N> <type> damage"
+  // The 'i' flag makes [A-Z] match [a-z], which is why it grabs "and" or "the".
+  // We keep it for "takes/suffers/damage" but clean the capture group afterward.
   const pattern =
-    /(\b[A-Z][a-z]+(?: [A-Z][a-z]+)*|you)\b (?:takes?|suffers?) (\d+)(?: \w+)? damage/gi;
+    /\b([A-Z][a-z]+(?: [A-Z][a-z]+)*|you)\b (?:takes?|suffers?) (\d+)(?: \w+)? damage/gi;
+
   let match;
   while ((match = pattern.exec(text)) !== null) {
+    const rawName = match[1];
+
+    // Clean up common narrative prefixes that the greedy regex might grab
+    const targetName = rawName.replace(/^(?:and |the |a |an )+/i, "").trim();
+
     events.push({
-      targetName: match[1].toLowerCase() === "you" ? "player" : match[1],
+      targetName: targetName.toLowerCase() === "you" ? "player" : targetName,
       amount: parseInt(match[2], 10),
     });
   }

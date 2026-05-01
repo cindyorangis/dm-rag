@@ -1,0 +1,61 @@
+name: Next.js CI Pipeline
+
+# Trigger the workflow on pushes and pull requests to the main branch
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the code from the repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20" # Use the version of Node you use locally
+          cache: "npm" # Speeds up installation by caching dependencies
+
+      # 3. Install dependencies
+      # We use npm ci instead of npm install for cleaner, more reliable CI builds
+      - name: Install Dependencies
+        run: npm ci
+
+      # 4. Run Prettier to check formatting
+      - name: Check Formatting (Prettier)
+        run: npm run format:check
+
+      # 5. Run ESLint
+      - name: Run Linter (ESLint)
+        run: npm run lint
+
+      # 6. Run tests with Vitest
+      - name: Run Tests (Vitest)
+        run: npm run test
+
+      # 7. Cache Next.js build folder to speed up future runs
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ${{ github.workspace }}/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
+
+      # 8. Build the Next.js app to ensure it compiles without errors
+      - name: Build Next.js App
+        run: npm run build
+        # If your Next.js build requires Supabase environment variables to compile successfully,
+        # you need to mock them here or add them to your GitHub Repository Secrets.
+        # env:
+        #   NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+        #   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
