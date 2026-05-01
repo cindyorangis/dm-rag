@@ -54,31 +54,43 @@ export default function SessionPage() {
         fetch(`/api/sessions/${id}`),
         fetch(`/api/combat/${id}`),
       ]);
+
       if (sessionRes.ok) {
         const session = await sessionRes.json();
         if (session.character_context)
           setCharacter(parseCharacterContext(session.character_context));
       }
+
       if (combatRes.ok) {
         const combat = await combatRes.json();
         setCombatState(combat);
-        if (combat?.is_active && !combat?.awaiting_player_initiative)
+
+        if (combat?.is_active && !combat?.awaiting_player_initiative) {
           setSidebarTab("combat");
+        }
       }
-    } catch {}
+    } catch (err) {
+      console.error(err);
+    }
   }, [id]);
 
   useEffect(() => {
-    fetchSessionData();
-  }, [fetchSessionData]);
-  useEffect(() => {
-    if (!isStreaming) fetchSessionData();
-  }, [isStreaming, fetchSessionData]);
-  useEffect(() => {
-    if (combatState?.is_active && !combatState.awaiting_player_initiative) {
-      setSidebarTab("combat");
-    }
-  }, [combatState?.is_active, combatState?.awaiting_player_initiative]);
+    let isMounted = true;
+
+    const syncData = async () => {
+      // Only proceed if we aren't streaming
+      if (!isStreaming) {
+        await fetchSessionData();
+      }
+    };
+
+    syncData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchSessionData, isStreaming]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, awaitingInitiative, pendingRolls]);

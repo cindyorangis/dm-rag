@@ -14,7 +14,7 @@ import {
   selectDeathResolution,
 } from "./engine";
 import * as dice from "./dice";
-import type { Combatant, CombatState } from "./types";
+import type { Combatant, CombatState, Condition } from "./types";
 
 // Mock the dice module so we can control initiative rolls
 vi.mock("./dice", () => ({
@@ -186,24 +186,24 @@ describe("Combat Engine", () => {
   describe("Conditions", () => {
     it("should add a condition without duplicating", () => {
       const state = createMockState([
-        createMockCombatant({ id: "1", conditions: ["prone"] as any }),
+        createMockCombatant({ id: "1", conditions: ["prone"] as Condition[] }),
       ]);
 
       // Add a new one
-      let nextState = addCondition(state, "1", "poisoned" as any);
+      let nextState = addCondition(state, "1", "poisoned" as Condition);
       expect(nextState.combatants[0].conditions).toEqual(["prone", "poisoned"]);
 
       // Attempt to add existing
-      nextState = addCondition(nextState, "1", "prone" as any);
-      expect(nextState.combatants[0].conditions).toEqual(["prone", "poisoned"]); // unchanged
+      nextState = addCondition(nextState, "1", "prone" as Condition);
+      expect(nextState.combatants[0].conditions).toEqual(["prone", "poisoned"]);
     });
 
     it("should remove a condition", () => {
       const state = createMockState([
-        createMockCombatant({ id: "1", conditions: ["prone"] as any }),
+        createMockCombatant({ id: "1", conditions: ["prone"] as Condition[] }),
       ]);
 
-      const nextState = removeCondition(state, "1", "prone" as any);
+      const nextState = removeCondition(state, "1", "prone" as Condition);
       expect(nextState.combatants[0].conditions).toEqual([]);
     });
   });

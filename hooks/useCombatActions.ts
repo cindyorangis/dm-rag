@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useEffect } from "react";
 import { CombatState } from "@/lib/combat/types";
 import type { RollRequest } from "@/hooks/useChat";
 
@@ -34,7 +34,10 @@ export function useCombatActions({
   const confirmedCountRef = useRef(0);
   // Keep a stable reference to the current batch size to avoid stale closures
   const pendingRollsRef = useRef<RollRequest[]>(pendingRolls);
-  pendingRollsRef.current = pendingRolls;
+
+  useEffect(() => {
+    pendingRollsRef.current = pendingRolls;
+  }, [pendingRolls]);
 
   const handleInitiativeRoll = useCallback(
     async (total: number) => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PostgrestResponse } from "@supabase/supabase-js";
 import {
   performVectorSearch,
   performKeywordSearch,
@@ -50,7 +51,7 @@ describe("Search Service", () => {
       vi.mocked(supabaseAdmin.rpc).mockResolvedValueOnce({
         data: mockResults,
         error: null,
-      } as any);
+      } as unknown as PostgrestResponse<typeof mockResults>);
 
       const result = await performVectorSearch("query", "lost-mine", 5);
 
@@ -83,7 +84,7 @@ describe("Search Service", () => {
       vi.mocked(supabaseAdmin.rpc).mockResolvedValueOnce({
         data: mockResults,
         error: null,
-      } as any);
+      } as unknown as PostgrestResponse<typeof mockResults>);
 
       const result = await performKeywordSearch("goblin", "lost-mine", 5);
 

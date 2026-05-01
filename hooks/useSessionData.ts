@@ -51,22 +51,47 @@ export function useSessionData(
     }
   }, [id]);
 
-  // Initial load
+  // Handles initial load AND stream completion
+  // Use a single Effect for synchronization
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    // If we're streaming, we don't want to refresh yet
+    if (isStreaming) return;
 
-  // Refresh after each streaming response completes
-  useEffect(() => {
-    if (!isStreaming) refresh();
-  }, [isStreaming, refresh]);
+    // Use a local variable to prevent state updates on unmounted components
+    let ignore = false;
 
-  // Auto-switch to combat tab when combat becomes active
-  useEffect(() => {
-    if (combatState?.is_active && !combatState.awaiting_player_initiative) {
-      setActiveTab("combat");
+    async function startFetching() {
+      const [sessionRes, combatRes] = await Promise.all([
+        fetch(`/api/sessions/${id}`),
+        fetch(`/api/combat/${id}`),
+      ]);
+
+      if (ignore) return;
+
+      // Handle Session Data
+      if (sessionRes.ok) {
+        const session = await sessionRes.json();
+        if (session.character_context) {
+          setCharacter(parseCharacterContext(session.character_context));
+        }
+      }
+
+      // Handle Combat Data
+      if (combatRes.ok) {
+        const combat: CombatState = await combatRes.json();
+        setCombatState(combat);
+        if (combat?.is_active && !combat?.awaiting_player_initiative) {
+          setActiveTab("combat");
+        }
+      }
     }
-  }, [combatState?.is_active, combatState?.awaiting_player_initiative]);
+
+    startFetching();
+
+    return () => {
+      ignore = true;
+    };
+  }, [id, isStreaming]); // id and isStreaming are the true "synchronization" triggers
 
   return {
     character,

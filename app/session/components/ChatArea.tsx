@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect } from "react";
 import { DMMessage, UserMessage } from "@/components/ChatMessage";
 import DiceRoller from "./DiceRoller";
 import InitiativeRoller from "./InitiativeRoller";
