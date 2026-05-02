@@ -193,14 +193,11 @@ export async function retrieveChunks(
         content: result.content,
       });
     } else if (result.score > 0.3) {
-      // Boost chunks that appear in both result sets
       const boost = 1.2;
       combinedMap.set(result.id, {
         ...existing,
-        vectorScore:
-          existing.vectorScore * vectorWeight +
-          result.score * keywordWeight * boost,
-        keywordScore: result.score,
+        vectorScore: existing.vectorScore,
+        keywordScore: result.score * boost,
       });
     }
   }
