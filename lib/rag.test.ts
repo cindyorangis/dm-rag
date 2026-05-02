@@ -328,9 +328,14 @@ describe("retrieveChunks", () => {
   });
 
   it("returns chunks sorted by combined score descending", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -344,9 +349,14 @@ describe("retrieveChunks", () => {
   });
 
   it("respects the matchCount limit", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 2);
 
@@ -354,9 +364,14 @@ describe("retrieveChunks", () => {
   });
 
   it("boosts chunks that appear in both vector and keyword results", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 10);
 
@@ -373,9 +388,14 @@ describe("retrieveChunks", () => {
   });
 
   it("deduplicates chunks that appear in both result sets", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 20);
     const ids = results.map((r) => r.id);
@@ -384,9 +404,14 @@ describe("retrieveChunks", () => {
   });
 
   it("includes chunks from keyword results not in vector results", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 20);
     const ids = results.map((r) => r.id);
@@ -412,22 +437,43 @@ describe("retrieveChunks", () => {
     const keywordOnlyResult = [
       { id: "chunk-99", score: 1.0, content: "Pure keyword match\nContent." },
     ];
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(keywordOnlyResult));
+
+    // Robust mock implementation handling both RPC calls by name
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(keywordOnlyResult);
+      }
+      return rpcOk([]); // Fallback
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 10, {
       vectorWeight: 0.0,
       keywordWeight: 1.0,
     });
 
-    expect(results.find((r) => r.id === "chunk-99")).toBeDefined();
+    // Ensure results were actually returned
+    expect(results.length).toBeGreaterThan(0);
+
+    // Verify chunk-99 exists in the combined results
+    const chunk99 = results.find((r) => r.id === "chunk-99");
+    expect(chunk99).toBeDefined();
+
+    // With vectorWeight 0 and keywordWeight 1, similarity should equal keyword score (1.0)
+    expect(chunk99?.similarity).toBe(1.0);
   });
 
   it("sets section from first line of content", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk([MOCK_VECTOR_RESULTS[0]]))
-      .mockResolvedValueOnce(rpcOk([]));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -435,9 +481,14 @@ describe("retrieveChunks", () => {
   });
 
   it("sets adventureId from the adventure slug", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk([MOCK_VECTOR_RESULTS[0]]))
-      .mockResolvedValueOnce(rpcOk([]));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -516,9 +567,14 @@ describe("retrieveChunksWithReRank", () => {
   });
 
   it("returns finalMatchCount results", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunksWithReRank(
       "goblin",
@@ -531,9 +587,14 @@ describe("retrieveChunksWithReRank", () => {
   });
 
   it("results are sorted by score descending", async () => {
-    mockRpc
-      .mockResolvedValueOnce(rpcOk(MOCK_VECTOR_RESULTS))
-      .mockResolvedValueOnce(rpcOk(MOCK_KEYWORD_RESULTS));
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk(MOCK_KEYWORD_RESULTS);
+      }
+    }) as any);
 
     const results = await retrieveChunksWithReRank(
       "goblin",
