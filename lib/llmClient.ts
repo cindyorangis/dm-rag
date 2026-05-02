@@ -41,7 +41,7 @@ const DEFAULT_OLLAMA_BASE_URL =
 const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_CHAT_MODEL || "llama3.1:8b";
 const DEFAULT_GROQ_BASE_URL =
   process.env.GROQ_BASE_URL || "https://api.groq.com/v1";
-const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+const DEFAULT_GROQ_MODEL = "llama-3.1-8k-instant";
 
 export function getLlmProvider(): LlmProvider {
   const explicit = process.env.LLM_PROVIDER?.trim().toLowerCase();
