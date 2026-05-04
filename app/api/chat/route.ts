@@ -25,11 +25,13 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { retrieveChunks } from "@/lib/rag";
 import {
+  type LlmMessage,
   createLlmChatStream,
   getLlmProvider,
   parseLlmStreamChunk,
   readLlmError,
 } from "@/lib/llmClient";
+import { compressConversationHistory } from "@/lib/memory-compression";
 import {
   applyNarrativeFlagOps,
   parseNarrativeFlagOpsFromText,
@@ -49,16 +51,13 @@ const DEFAULT_ADVENTURE_SLUG = "lost-mine-of-phandelver";
 
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
-  const conversationHistory = Array.isArray(history) ? history : [];
+  const conversationHistory = normalizeConversationHistory(history);
   const supabase = supabaseAdmin;
   const llmProvider = getLlmProvider();
 
   // 1. Load session
-  const { data: sessionRow } = await supabase
-    .from("sessions")
-    .select("narrative_flags, adventure_slug, character_context")
-    .eq("id", sessionId)
-    .single();
+  const sessionContext = await loadSessionContext(sessionId, supabase);
+  const sessionRow = sessionContext.data;
 
   const narrativeFlags = sanitizeNarrativeFlags(sessionRow?.narrative_flags);
   const adventureSlug: string =
@@ -71,6 +70,41 @@ export async function POST(req: NextRequest) {
   // 3. Load current combat state
   let combatState = await getCombatState(sessionId);
 
+  // 4. Compress long histories into rolling memory
+  let promptMemorySummary: string | null =
+    typeof sessionRow?.memory_summary === "string"
+      ? sessionRow.memory_summary
+      : null;
+  let messagesForModel = conversationHistory;
+
+  try {
+    const compressed = await compressConversationHistory({
+      history: conversationHistory,
+      provider: llmProvider,
+      rollingSummary: promptMemorySummary,
+      summarizedMessageCount: sessionRow?.memory_summary_message_count ?? 0,
+    });
+
+    promptMemorySummary = compressed.rollingSummary;
+    messagesForModel = compressed.messagesForModel;
+
+    if (compressed.summaryWasUpdated && sessionContext.memoryColumnsAvailable) {
+      await supabase
+        .from("sessions")
+        .update({
+          memory_summary: compressed.rollingSummary,
+          memory_summary_message_count: compressed.summarizedMessageCount,
+        })
+        .eq("id", sessionId);
+    }
+  } catch (error) {
+    console.warn("Memory compression skipped due to summarization failure.", {
+      sessionId,
+      error,
+    });
+    messagesForModel = conversationHistory;
+  }
+
   // 4. Build DM system prompt
   const systemPrompt = buildDMSystemPrompt({
     retrievedChunks,
@@ -78,10 +112,11 @@ export async function POST(req: NextRequest) {
     narrativeFlags,
     adventureSlug,
     characterContext: sessionRow?.character_context ?? null,
+    rollingSummary: promptMemorySummary,
   });
 
   // 5. Build messages array
-  const messages = [...conversationHistory, { role: "user", content: message }];
+  const messages = [...messagesForModel, { role: "user", content: message }];
 
   // 6. Call LLM
   const llmRes = await createLlmChatStream({
@@ -223,6 +258,82 @@ export async function POST(req: NextRequest) {
       "Cache-Control": "no-cache",
     },
   });
+}
+
+async function loadSessionContext(
+  sessionId: string,
+  supabase: supabaseAdminType,
+): Promise<{
+  data: {
+    narrative_flags?: Record<string, unknown>;
+    adventure_slug?: string | null;
+    character_context?: string | null;
+    memory_summary?: string | null;
+    memory_summary_message_count?: number | null;
+  } | null;
+  memoryColumnsAvailable: boolean;
+}> {
+  const withMemoryColumns =
+    "narrative_flags, adventure_slug, character_context, memory_summary, memory_summary_message_count";
+  const fallbackColumns = "narrative_flags, adventure_slug, character_context";
+
+  const withMemory = await supabase
+    .from("sessions")
+    .select(withMemoryColumns)
+    .eq("id", sessionId)
+    .single();
+
+  if (!withMemory.error) {
+    return {
+      data: withMemory.data ?? null,
+      memoryColumnsAvailable: true,
+    };
+  }
+
+  const missingColumn =
+    withMemory.error.code === "42703" ||
+    withMemory.error.message?.includes("memory_summary");
+  if (!missingColumn) {
+    return {
+      data: null,
+      memoryColumnsAvailable: false,
+    };
+  }
+
+  const fallback = await supabase
+    .from("sessions")
+    .select(fallbackColumns)
+    .eq("id", sessionId)
+    .single();
+
+  return {
+    data: fallback.data ?? null,
+    memoryColumnsAvailable: false,
+  };
+}
+
+function normalizeConversationHistory(history: unknown): LlmMessage[] {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .filter(
+      (
+        message,
+      ): message is {
+        role: "user" | "assistant";
+        content: string;
+      } =>
+        typeof message === "object" &&
+        message !== null &&
+        "role" in message &&
+        "content" in message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string",
+    )
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
 }
 
 async function updateNarrativeFlagsFromDmResponse({

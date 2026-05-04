@@ -165,6 +165,17 @@ describe("DM Prompt Builder", () => {
       expect(prompt).toContain("met_sildar: true");
       expect(prompt).toContain("goblin_friend: false");
     });
+
+    it("includes rolling memory when provided", () => {
+      const prompt = buildDMSystemPrompt({
+        retrievedChunks: [],
+        combatState: null,
+        rollingSummary: "Active quest: Find Gundren. NPC trust: Sildar=high.",
+      });
+
+      expect(prompt).toContain("--- SESSION MEMORY (COMPRESSED) ---");
+      expect(prompt).toContain("Active quest: Find Gundren");
+    });
   });
 
   describe("buildCombatStartPrompt", () => {

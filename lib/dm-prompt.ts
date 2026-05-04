@@ -259,6 +259,7 @@ export interface BuildPromptOptions {
   characterContext?: string | null;
   narrativeFlags?: NarrativeFlags;
   adventureSlug?: string | null;
+  rollingSummary?: string | null;
 }
 
 export function buildDMSystemPrompt({
@@ -267,6 +268,7 @@ export function buildDMSystemPrompt({
   characterContext,
   narrativeFlags,
   adventureSlug,
+  rollingSummary,
 }: BuildPromptOptions): string {
   const sections: string[] = [buildBasePrompt(adventureSlug)];
 
@@ -276,6 +278,12 @@ export function buildDMSystemPrompt({
       characterContext ?? buildFallbackCharacter(adventureSlug)
     }`,
   );
+
+  if (rollingSummary?.trim()) {
+    sections.push(
+      `\n--- SESSION MEMORY (COMPRESSED) ---\n${rollingSummary.trim()}`,
+    );
+  }
 
   // RAG chunks
   if (retrievedChunks.length > 0) {
