@@ -114,6 +114,7 @@ export function useChat(sessionId: string) {
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<HistoryItem[]>([]);
   const queuedInputsRef = useRef<QueuedInput[]>([]);
+  const processNextQueuedInputRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     const loadMessages = async () => {
@@ -328,6 +329,8 @@ ${queuedCount > 0 ? `Queued actions waiting: ${queuedCount}` : ""}`.trim(),
 
     // 2. Extract the item
     const next = queue[0];
+    queuedInputsRef.current = queue.slice(1);
+    setQueuedInputs(queuedInputsRef.current);
 
     // 3. Update both the ref and the state synchronously
     queuedInputsRef.current = queue.slice(1);
@@ -341,9 +344,14 @@ ${queuedCount > 0 ? `Queued actions waiting: ${queuedCount}` : ""}`.trim(),
     });
 
     if (result.ok) {
-      void processNextQueuedInput();
+      void processNextQueuedInputRef.current?.();
     }
   }, [isStreaming, failedTurn, runTurn]);
+
+  // Keep the ref in sync with the latest version of the callback
+  useEffect(() => {
+    processNextQueuedInputRef.current = processNextQueuedInput;
+  }, [processNextQueuedInput]);
 
   const sendMessage = useCallback(
     async (userInput: string) => {
