@@ -32,7 +32,7 @@ const rpcOk = (data: unknown) =>
     count: null,
     status: 200,
     statusText: "OK",
-  }) as any;
+  }) as unknown as Awaited<ReturnType<typeof supabaseAdmin.rpc>>;
 
 const rpcErr = (message: string) =>
   ({
@@ -47,7 +47,7 @@ const rpcErr = (message: string) =>
     count: null,
     status: 500,
     statusText: "Error",
-  }) as any;
+  }) as unknown as Awaited<ReturnType<typeof supabaseAdmin.rpc>>;
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -335,7 +335,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -356,7 +356,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 2);
 
@@ -371,7 +371,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 10);
 
@@ -395,7 +395,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 20);
     const ids = results.map((r) => r.id);
@@ -411,7 +411,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 20);
     const ids = results.map((r) => r.id);
@@ -447,7 +447,7 @@ describe("retrieveChunks", () => {
         return rpcOk(keywordOnlyResult);
       }
       return rpcOk([]); // Fallback
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG, 10, {
       vectorWeight: 0.0,
@@ -473,7 +473,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -488,7 +488,7 @@ describe("retrieveChunks", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
@@ -574,7 +574,7 @@ describe("retrieveChunksWithReRank", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunksWithReRank(
       "goblin",
@@ -594,7 +594,7 @@ describe("retrieveChunksWithReRank", () => {
       if (rpcName === "match_chunks_scoped_keywords") {
         return rpcOk(MOCK_KEYWORD_RESULTS);
       }
-    }) as any);
+    }) as unknown as typeof supabaseAdmin.rpc);
 
     const results = await retrieveChunksWithReRank(
       "goblin",

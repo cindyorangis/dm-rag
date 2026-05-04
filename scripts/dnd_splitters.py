@@ -1,13 +1,3 @@
-"""
-dnd_splitters.py
-D&D-aware text splitting pipeline — Python port of lib/text-splitters/
-
-Three splitters mirror the TypeScript originals:
-  - DndTextSplitter   → splits on chapter/section headers first
-  - TableSplitter     → extracts Markdown tables into structured chunks
-  - SplitterFactory   → picks the right splitter for the content type
-"""
-
 from __future__ import annotations
 
 import re
@@ -74,12 +64,40 @@ _TABLE_TYPE_HINTS: dict[str, list[str]] = {
 _SKIP_PAGE_PATTERNS = [
     re.compile(r"^\s*table\s+of\s+contents", re.IGNORECASE),
     re.compile(r"^\s*contents\s*$", re.IGNORECASE),
-    # TOC entries: lines ending in ".... 42" or "Chapter 3...... 18"
     re.compile(r"\.{3,}\s*\d+\s*$", re.MULTILINE),
 ]
 
-# Pages where >40% of lines look like TOC entries are skipped
 _TOC_LINE_RE = re.compile(r"\.{2,}\s*\d+\s*$")
+
+# Real Markdown table: header row + separator row (used for routing in ingest)
+_REAL_TABLE_RE = re.compile(
+    r"^\|.+\|\s*\n\|[-| :]+\|",
+    re.MULTILINE,
+)
+
+# Full Markdown table: header + separator + data rows (used for extraction)
+_TABLE_RE = re.compile(
+    r"^(\|.+\|[ \t]*)\n"
+    r"(\|[-| :]+\|[ \t]*)\n"
+    r"((?:\|.+\|[ \t]*\n?)+)",
+    re.MULTILINE,
+)
+
+# Splits on ATX headings AND named D&D section labels
+_SECTION_SPLIT_RE = re.compile(
+    r"(?=^#{1,3}\s|^(?:Actions|Reactions|Traits|Lore|Stats|Legendary Actions|Lair Actions)\s*:?\s*$)",
+    re.MULTILINE,
+)
+
+# Separator hierarchy for recursive fallback
+_SEPARATORS = ["\n\n", "\n", ". ", ", ", " ", ""]
+
+_CELL_MARKER_RE = re.compile(r"^[*_#\-]+|[*_#\-]+$")
+
+
+def is_real_markdown_table(text: str) -> bool:
+    """Returns True only if the text contains a proper Markdown table."""
+    return bool(_REAL_TABLE_RE.search(text))
 
 
 def is_junk_page(text: str) -> bool:
@@ -88,17 +106,14 @@ def is_junk_page(text: str) -> bool:
     if not lines:
         return True
 
-    # Skip if any strong skip pattern matches
     for pattern in _SKIP_PAGE_PATTERNS:
         if pattern.search(text):
             return True
 
-    # Skip if >40% of non-empty lines look like TOC entries
     toc_lines = sum(1 for l in lines if _TOC_LINE_RE.search(l))
     if toc_lines / len(lines) > 0.4:
         return True
 
-    # Skip if average word length is suspiciously low (OCR garbage)
     words = text.split()
     if words:
         avg_word_len = sum(len(w) for w in words) / len(words)
@@ -117,33 +132,25 @@ def _infer_table_type(headers: list[str], context_hint: str = "") -> DndTableTyp
 
 
 def clean_pdf_text(text: str) -> str:
-    # Rejoin hyphenated line breaks ("loca-\ntions" → "locations")
+    # Rejoin hyphenated line breaks
     text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)
-
-    # Remove page header/footer noise e.g. "CHAPTER1|THEBASICS 5"
+    # Remove page header/footer noise
     text = re.sub(r"\b[A-Z]+\d*\|[A-Z]+\s+\d+\b", "", text)
-
-    # Remove standalone page numbers (line is just a number)
+    # Remove standalone page numbers
     text = re.sub(r"^\s*\d+\s*$", "", text, flags=re.MULTILINE)
 
-    # Remove credits-style lines: "Name, Name, Name" with 3+ commas
     lines = text.splitlines()
     cleaned = []
     for line in lines:
-        # Drop lines that are pure comma-separated names (credits/attribution)
         if line.count(",") >= 3 and re.match(r"^[\w\s,\.]+$", line.strip()):
             continue
-        # Drop very short lines that are clearly TOC fragments
         stripped = line.strip()
         if stripped and len(stripped) < 4:
             continue
         cleaned.append(line)
 
     text = "\n".join(cleaned)
-
-    # Collapse excess blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
-
     return text.strip()
 
 
@@ -153,20 +160,16 @@ def build_boilerplate_blacklist(
     max_fragment_len: int = 120,
 ) -> set[str]:
     """
-    Finds text fragments that repeat across many pages — these are
-    headers, footers, sidebar callouts, and running marginalia that
-    should be stripped from every page before chunking.
+    Finds text fragments that repeat across many pages — headers, footers,
+    sidebar callouts, and running marginalia to strip before chunking.
     """
-    # Collect all non-trivial lines across all pages
     line_counts: Counter = Counter()
     for _, text in pages:
         for line in text.splitlines():
             stripped = line.strip()
-            # Only consider lines of meaningful but bounded length
             if 8 < len(stripped) <= max_fragment_len:
                 line_counts[stripped] += 1
 
-    # Any line appearing on 4+ distinct pages is boilerplate
     return {line for line, count in line_counts.items() if count >= min_occurrences}
 
 
@@ -177,23 +180,39 @@ def remove_boilerplate(text: str, blacklist: set[str]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
 
 
+def html_tables_to_markdown(text: str) -> str:
+    """Convert HTML tables to Markdown so TableSplitter can handle them."""
+
+    def convert_table(m):
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(0), re.DOTALL | re.IGNORECASE)
+        md_rows = []
+        for i, row in enumerate(rows):
+            cells = re.findall(
+                r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.DOTALL | re.IGNORECASE
+            )
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+            md_rows.append("| " + " | ".join(cells) + " |")
+            if i == 0:
+                md_rows.append("| " + " | ".join(["---"] * len(cells)) + " |")
+        return "\n".join(md_rows)
+
+    return re.compile(r"<table[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE).sub(
+        convert_table, text
+    )
+
+
 # ── DndTextSplitter ────────────────────────────────────────────────────────
-
-# Matches ATX headings (# / ## / ###) and named D&D section labels
-_SECTION_HEADER_RE = re.compile(
-    r"^#{1,3}\s.+$"  # # Chapter / ## Section / ### Sub
-    r"|^(Actions|Reactions|Traits|Lore|Stats)\s*:?$",  # named D&D sections
-    re.MULTILINE,
-)
-
-# Separator hierarchy for the recursive fallback (most → least preferred break)
-_SEPARATORS = ["\n\n", "\n", ". ", ", ", " ", ""]
 
 
 class DndTextSplitter:
     """
     Splits D&D source text on structural section boundaries first.
     Falls back to recursive character splitting for oversized sections.
+
+    Fixes vs. original:
+    - split_text uses _SECTION_SPLIT_RE (covers Actions/Traits/etc., not just #)
+    - create_documents accepts and propagates `source`
+    - _recursive_split applies chunk_overlap between chunks
     """
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 100) -> None:
@@ -201,8 +220,8 @@ class DndTextSplitter:
         self.chunk_overlap = chunk_overlap
 
     def split_text(self, text: str) -> list[str]:
-        # Pass 1 — split on D&D section headers
-        raw_sections = re.split(r"(?=^#{1,3}\s)", text, flags=re.MULTILINE)
+        # Pass 1 — split on D&D section headers AND named section labels
+        raw_sections = re.split(_SECTION_SPLIT_RE, text)
         sections = [s.strip() for s in raw_sections if s and s.strip()]
 
         # Pass 2 — recursively split any section still over the size limit
@@ -213,30 +232,47 @@ class DndTextSplitter:
             else:
                 chunks.append(section)
 
-        return chunks
+        # Pass 3 — apply overlap by appending the start of the next chunk
+        # to the end of the current one
+        return self._apply_overlap(chunks)
 
     def create_documents(
         self,
         texts: list[str],
         metadatas: list[dict] | None = None,
+        source: str = "",
     ) -> list[Document]:
         docs: list[Document] = []
         for i, text in enumerate(texts):
-            meta = (metadatas[i] if metadatas else {}) or {}
+            meta = dict((metadatas[i] if metadatas else {}) or {})
+            if source:
+                meta.setdefault("source", source)
             for chunk in self.split_text(text):
                 docs.append(Document(page_content=chunk, metadata=dict(meta)))
         return docs
 
     # ── private ──────────────────────────────────────────────────────────
 
+    def _apply_overlap(self, chunks: list[str]) -> list[str]:
+        """
+        Appends the first `chunk_overlap` characters of chunk[i+1] to
+        chunk[i] so that boundary concepts appear in both chunks.
+        """
+        if self.chunk_overlap <= 0 or len(chunks) <= 1:
+            return chunks
+
+        overlapped: list[str] = []
+        for i, chunk in enumerate(chunks):
+            if i < len(chunks) - 1:
+                tail = chunks[i + 1][: self.chunk_overlap].strip()
+                overlapped.append(chunk + ("\n\n" + tail if tail else ""))
+            else:
+                overlapped.append(chunk)
+        return overlapped
+
     def _recursive_split(self, text: str) -> list[str]:
-        """
-        Tries each separator in order; if it produces chunks that are still
-        too large, recurses with the next separator.
-        """
         for sep in _SEPARATORS:
             if sep == "":
-                # Hard character-level split as last resort
                 return self._hard_split(text)
 
             parts = text.split(sep)
@@ -255,7 +291,6 @@ class DndTextSplitter:
             if not leftovers:
                 return good
 
-            # Some parts still too large — recurse on leftovers with next sep
             result = list(good)
             for leftover in leftovers:
                 result.extend(
@@ -292,61 +327,25 @@ class DndTextSplitter:
                 chunks.append(text[start:].strip())
                 break
 
-            # Look for the last space within the chunk to avoid cutting words
             last_space = text.rfind(" ", start, end)
             if last_space != -1 and last_space > start:
                 end = last_space
 
             chunks.append(text[start:end].strip())
-            start = end - self.chunk_overlap  # Maintain overlap from the new end
+            start = end - self.chunk_overlap
         return [c for c in chunks if c]
 
 
 # ── TableSplitter ──────────────────────────────────────────────────────────
 
-# Full Markdown table: header row, separator row, one or more data rows
-_TABLE_RE = re.compile(
-    r"^(\|.+\|[ \t]*)\n"  # header row
-    r"(\|[-| :]+\|[ \t]*)\n"  # separator row
-    r"((?:\|.+\|[ \t]*\n?)+)",  # data rows
-    re.MULTILINE,
-)
 
-# Strips leading markdown bold/italic markers from cell values
-_CELL_MARKER_RE = re.compile(r"^[*_#\-]+|[*_#\-]+$")
-
-
-# Normalises a header string to a dict key
 def _normalise_key(header: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", header.lower()).strip("_")
-
-
-def html_tables_to_markdown(text: str) -> str:
-    """Convert HTML tables to Markdown so TableSplitter can handle them."""
-    import re
-
-    def convert_table(m):
-        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(0), re.DOTALL | re.IGNORECASE)
-        md_rows = []
-        for i, row in enumerate(rows):
-            cells = re.findall(
-                r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.DOTALL | re.IGNORECASE
-            )
-            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
-            md_rows.append("| " + " | ".join(cells) + " |")
-            if i == 0:
-                md_rows.append("| " + " | ".join(["---"] * len(cells)) + " |")
-        return "\n".join(md_rows)
-
-    return re.compile(r"<table[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE).sub(
-        convert_table, text
-    )
 
 
 def parse_dnd_tables(text: str, table_name: str = "") -> list[DndTable]:
     """
     Extract all Markdown tables from text and return DndTable objects.
-    Mirrors parseDndTables() in table-splitters.ts.
     """
     tables: list[DndTable] = []
 
@@ -354,7 +353,6 @@ def parse_dnd_tables(text: str, table_name: str = "") -> list[DndTable]:
         header_line = match.group(1).strip()
         body_text = match.group(3).strip()
 
-        # Parse headers — drop empty cells from leading/trailing pipes
         headers = [h.strip() for h in header_line.split("|") if h.strip()]
         if not headers:
             continue
@@ -365,7 +363,7 @@ def parse_dnd_tables(text: str, table_name: str = "") -> list[DndTable]:
             if len(cells) != len(headers):
                 continue
             if all(re.match(r"^[-:]+$", c) for c in cells):
-                continue  # skip separator rows that slipped through
+                continue
 
             row: dict[str, str] = {}
             for i, header in enumerate(headers):
@@ -389,14 +387,8 @@ def parse_dnd_tables(text: str, table_name: str = "") -> list[DndTable]:
 
 
 def create_document_from_table(table: DndTable) -> Document:
-    """
-    Convert a DndTable into a Document for embedding.
-    Mirrors createDocumentFromTable() in table-splitters.ts.
-    """
-
-    # Use the table source or type as a prefix for context
+    """Convert a DndTable into a single Document for embedding."""
     context_header = f"Table: {table.source or table.table_type.title()}\n"
-
     rows_content = []
     for row in table.rows:
         row_str = "\n".join(
@@ -404,9 +396,7 @@ def create_document_from_table(table: DndTable) -> Document:
         )
         rows_content.append(row_str)
 
-    # Prepend context to the chunk content
     content = context_header + "\n\n".join(rows_content)
-
     first_row = table.rows[0] if table.rows else {}
     row_index = first_row.get("name") or first_row.get("spell") or "unknown"
 
@@ -424,7 +414,9 @@ def create_document_from_table(table: DndTable) -> Document:
 class TableSplitter:
     """
     Extracts Markdown tables first, then splits remaining prose with overlap.
-    Mirrors TableSplitter in splitters.ts.
+
+    Fix vs. original: section headers are NO LONGER stripped from the prose
+    remainder — they provide essential context for the chunks that follow.
     """
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 100) -> None:
@@ -442,7 +434,7 @@ class TableSplitter:
     ) -> list[Document]:
         docs: list[Document] = []
         for i, text in enumerate(texts):
-            extra = (metadatas[i] if metadatas else {}) or {}
+            extra = dict((metadatas[i] if metadatas else {}) or {})
             for doc in self._split_to_documents(text, source):
                 docs.append(
                     Document(
@@ -457,13 +449,14 @@ class TableSplitter:
     def _split_to_documents(self, text: str, source: str = "") -> list[Document]:
         docs: list[Document] = []
 
-        # 1. Extract tables
+        # 1. Extract and document tables
         for table in parse_dnd_tables(text, source):
             docs.append(create_document_from_table(table))
 
-        # 2. Strip table rows and headings from remaining prose
+        # 2. Strip only the table rows from remaining prose.
+        #    Section headers (## Goblins etc.) are intentionally kept —
+        #    they anchor the prose chunks that follow them.
         remaining = _TABLE_RE.sub("", text)
-        remaining = re.sub(r"^#{1,3}\s.*$", "", remaining, flags=re.MULTILINE)
         remaining = re.sub(r"\n{3,}", "\n\n", remaining).strip()
 
         # 3. Overlap-aware prose chunking
@@ -472,14 +465,16 @@ class TableSplitter:
                 docs.append(
                     Document(
                         page_content=chunk,
-                        metadata={"chunk_type": "text"},
+                        metadata={
+                            "chunk_type": "text",
+                            **({"source": source} if source else {}),
+                        },
                     )
                 )
 
         return docs
 
     def _chunk_with_overlap(self, text: str) -> list[str]:
-        # If the whole text fits in one chunk, don't bother splitting
         if len(text) <= self.chunk_size:
             stripped = text.strip()
             return [stripped] if stripped else []
@@ -491,10 +486,8 @@ class TableSplitter:
             end = min(start + self.chunk_size, len(text))
             slice_ = text[start:end]
 
-            # Try to break on a natural boundary if not at the end
             if end < len(text):
                 threshold = self.chunk_size * 0.5
-
                 para_break = slice_.rfind("\n\n")
                 line_break = slice_.rfind("\n")
                 sent_break = slice_.rfind(". ")
@@ -505,18 +498,14 @@ class TableSplitter:
                     slice_ = slice_[: line_break + 1]
                 elif sent_break > threshold:
                     slice_ = slice_[: sent_break + 2]
-                # else: hard cut at chunk_size
 
             slice_ = slice_.strip()
             if slice_:
                 chunks.append(slice_)
 
-            # Advance by at least 1 character beyond the current start,
-            # but always make forward progress even when overlap is large
             advance = len(slice_) - self.chunk_overlap
             start += max(advance, min(self.chunk_size // 2, len(slice_), 1))
 
-            # Safety: if we somehow haven't moved, break to avoid infinite loop
             if start >= len(text):
                 break
 
@@ -532,6 +521,10 @@ class SplitterFactory:
     """
     Returns the appropriate splitter for the given content type.
     All three expose split_text() and create_documents().
+
+    "dnd"      → DndTextSplitter  (pure prose, structure-boundary splitting)
+    "table"    → TableSplitter    (mixed pages with Markdown tables)
+    "standard" → DndTextSplitter  (generic fallback; recursive splitting)
     """
 
     @staticmethod
@@ -542,7 +535,4 @@ class SplitterFactory:
     ) -> DndTextSplitter | TableSplitter:
         if splitter_type == "table":
             return TableSplitter(chunk_size, chunk_overlap)
-        # "dnd" and "standard" both use DndTextSplitter
-        # (in TS, "standard" uses RecursiveCharacterTextSplitter;
-        #  in Python the recursive fallback inside DndTextSplitter is equivalent)
         return DndTextSplitter(chunk_size, chunk_overlap)
