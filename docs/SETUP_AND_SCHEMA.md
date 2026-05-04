@@ -63,6 +63,19 @@ deathResolution?: {
 }
 ```
 
+### turn_metrics
+
+One row per DM turn, used for observability dashboards and quality/cost tuning. Captures token estimates, latency, retrieval effectiveness, hint quality, and combat-format/rules violations.
+
+```
+id, session_id, adventure_slug, provider,
+prompt_tokens_estimated, completion_tokens_estimated, total_tokens_estimated,
+llm_latency_ms, first_token_latency_ms,
+rag_chunks_requested, rag_chunks_returned, rag_hit_rate, rag_avg_similarity, rag_high_confidence_rate,
+status_items_count, hint_count, hint_diversity_count, hint_quality_score,
+combat_rule_error_count, combat_rule_errors (jsonb), created_at
+```
+
 ---
 
 ## Supabase Setup
@@ -122,6 +135,37 @@ create table combat_state (
   awaiting_player_initiative boolean default false,
   updated_at timestamptz default now()
 );
+```
+
+Create the turn metrics table:
+
+```sql
+create table if not exists turn_metrics (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references sessions(id) on delete cascade not null,
+  adventure_slug text not null,
+  provider text not null,
+  prompt_tokens_estimated int not null default 0,
+  completion_tokens_estimated int not null default 0,
+  total_tokens_estimated int not null default 0,
+  llm_latency_ms int not null default 0,
+  first_token_latency_ms int,
+  rag_chunks_requested int not null default 0,
+  rag_chunks_returned int not null default 0,
+  rag_hit_rate numeric(6,3) not null default 0,
+  rag_avg_similarity numeric(6,3),
+  rag_high_confidence_rate numeric(6,3),
+  status_items_count int not null default 0,
+  hint_count int not null default 0,
+  hint_diversity_count int not null default 0,
+  hint_quality_score numeric(6,3) not null default 0,
+  combat_rule_error_count int not null default 0,
+  combat_rule_errors jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists turn_metrics_session_id_idx
+  on turn_metrics(session_id, created_at desc);
 ```
 
 Create the characters table:

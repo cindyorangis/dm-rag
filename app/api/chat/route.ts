@@ -38,6 +38,7 @@ import {
   sanitizeNarrativeFlags,
   stripNarrativeFlagOpsBlocks,
 } from "@/lib/narrative/flags";
+import { buildTurnObservabilityMetric } from "@/lib/observability";
 
 // Constants
 const DEFAULT_PLAYER = {
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
   const conversationHistory = normalizeConversationHistory(history);
   const supabase = supabaseAdmin;
   const llmProvider = getLlmProvider();
+  const turnStartedAt = Date.now();
 
   // 1. Load session
   const sessionContext = await loadSessionContext(sessionId, supabase);
@@ -67,9 +69,13 @@ export async function POST(req: NextRequest) {
   // 2. Embed and retrieve chunks
   const chunks = await retrieveChunks(message, adventureSlug);
   const retrievedChunks = chunks.map((c: { content: string }) => c.content);
+  const chunkSimilarities = chunks.map(
+    (c: { similarity: number }) => c.similarity,
+  );
 
   // 3. Load current combat state
   let combatState = await getCombatState(sessionId);
+  const combatStateAtPrompt = combatState;
 
   // 4. Compress long histories into rolling memory
   let promptMemorySummary: string | null =
@@ -141,6 +147,7 @@ export async function POST(req: NextRequest) {
   // 7. Stream response
   const encoder = new TextEncoder();
   let fullResponse = "";
+  let firstTokenAt: number | null = null;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -181,6 +188,9 @@ export async function POST(req: NextRequest) {
 
         for (const token of parsedChunk.tokens) {
           if (token) {
+            if (firstTokenAt === null) {
+              firstTokenAt = Date.now();
+            }
             fullResponse += token;
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
@@ -210,6 +220,9 @@ export async function POST(req: NextRequest) {
 
         for (const token of parsedRemainder.tokens) {
           if (token) {
+            if (firstTokenAt === null) {
+              firstTokenAt = Date.now();
+            }
             fullResponse += token;
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
@@ -245,6 +258,37 @@ export async function POST(req: NextRequest) {
           content: dmResponseForState,
         },
       ]);
+
+      const turnLatencyMs = Date.now() - turnStartedAt;
+      const firstTokenLatencyMs =
+        firstTokenAt === null ? null : firstTokenAt - turnStartedAt;
+      const observabilityEnabled = readBooleanEnv("TURN_METRICS_ENABLED", true);
+
+      if (observabilityEnabled) {
+        const metrics = buildTurnObservabilityMetric({
+          sessionId,
+          adventureSlug,
+          provider: llmProvider,
+          systemPrompt,
+          messages,
+          dmResponse: fullResponse,
+          latencyMs: turnLatencyMs,
+          firstTokenLatencyMs,
+          retrieval: {
+            chunksRequested: readPositiveIntEnv("RAG_MAX_CHUNKS", 4),
+            minSimilarityThreshold: readBoundedFloatEnv(
+              "RAG_MIN_SIMILARITY",
+              0.2,
+            ),
+            similarities: chunkSimilarities,
+          },
+          combatState: combatStateAtPrompt,
+          awaitingPlayerInitiative:
+            combatStateAtPrompt?.awaiting_player_initiative ?? false,
+        });
+
+        await persistTurnMetrics(supabase, metrics);
+      }
 
       // 11. Signal frontend
       controller.enqueue(
@@ -357,6 +401,43 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readBoundedFloatEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return fallback;
+  return parsed;
+}
+
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+async function persistTurnMetrics(
+  supabase: supabaseAdminType,
+  metrics: ReturnType<typeof buildTurnObservabilityMetric>,
+) {
+  const { error } = await supabase.from("turn_metrics").insert(metrics);
+  if (!error) return;
+
+  const missingTable =
+    error.code === "42P01" ||
+    error.message.toLowerCase().includes("turn_metrics");
+  if (missingTable) {
+    console.warn(
+      "turn_metrics table not found. Apply DB migration to enable observability metrics.",
+    );
+    return;
+  }
+
+  console.warn("Failed to persist turn metrics", error);
 }
 
 async function updateNarrativeFlagsFromDmResponse({
