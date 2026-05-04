@@ -233,3 +233,31 @@ Combat state rehydrated if a fight was in progress
         ↓
 Adventure resumes
 ```
+
+---
+
+## 6. Failure Recovery UX
+
+When a chat turn fails (LLM outage, RAG timeout, upstream API error), the app now degrades gracefully instead of dropping the turn:
+
+- A synthetic DM recovery message is injected into chat: "DM is recovering..."
+- The player's failed action is preserved as a **retryable turn**.
+- Additional player actions submitted while recovering are **queued**.
+- A **Retry Turn** action replays the failed turn using the original pre-turn history snapshot, so continuity is preserved and duplicate turns are avoided.
+
+### Retry Semantics
+
+`useChat` stores:
+
+- `failedTurn.input` â€” the exact player message that failed
+- `failedTurn.baseHistory` â€” conversation history before that turn was sent
+- `failedTurn.recoveryMessageId` â€” to remove/replace recovery UI on retry
+
+On retry:
+
+1. Remove previous recovery assistant message.
+2. Re-send the failed player input with the original `baseHistory`.
+3. Stream new DM output into a fresh assistant message.
+4. If retry succeeds, drain queued player actions in FIFO order.
+
+This design keeps turn state deterministic and prevents message duplication when recovering from transient failures.

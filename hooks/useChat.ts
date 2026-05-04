@@ -14,6 +14,22 @@ export type Message = {
   streaming?: boolean;
 };
 
+type HistoryItem = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type QueuedInput = {
+  id: string;
+  content: string;
+};
+
+type FailedTurn = {
+  input: string;
+  baseHistory: HistoryItem[];
+  recoveryMessageId: string;
+};
+
 export type RollRequest = {
   type: "attack" | "check" | "save" | "damage";
   dice: string; // e.g. "d20+5", "d8+3"
@@ -93,7 +109,10 @@ export function useChat(sessionId: string) {
   const [error, setError] = useState<string | null>(null);
   const [awaitingInitiative, setAwaitingInitiative] = useState(false);
   const [pendingRolls, setPendingRolls] = useState<RollRequest[]>([]);
+  const [queuedInputs, setQueuedInputs] = useState<QueuedInput[]>([]);
+  const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef<HistoryItem[]>([]);
 
   useEffect(() => {
     const loadMessages = async () => {
@@ -124,19 +143,58 @@ export function useChat(sessionId: string) {
     loadMessages();
   }, [sessionId]);
 
-  const sendMessage = useCallback(
-    async (userInput: string) => {
-      if (!userInput.trim() || isStreaming) return;
+  useEffect(() => {
+    messagesRef.current = messages.map(({ role, content }) => ({
+      role,
+      content,
+    }));
+  }, [messages]);
 
+  const buildRecoveryMessage = useCallback(
+    (queuedCount: number) =>
+      `The DM is recovering from a rules-engine interruption. Your action is safely queued, and the scene state is preserved.
+
+[STATUS]
+* The DM connection paused before resolving the turn.
+* Your action is queued for retry without losing continuity.
+* Use "Retry Turn" to continue exactly from this moment.
+[/STATUS]
+
+[HINTS]
+[action] Retry turn | I retry my last action and continue from the exact same turn state.
+[explore] Rephrase action | I restate my action more clearly in case that helps the DM recover.
+[social] Ask for quick recap | I ask for a quick recap of the immediate situation before proceeding.
+[lore] Proceed cautiously | I continue with a conservative action while the DM stabilizes.
+[/HINTS]
+
+${queuedCount > 0 ? `Queued actions waiting: ${queuedCount}` : ""}`.trim(),
+    [],
+  );
+
+  const runTurn = useCallback(
+    async ({
+      userInput,
+      baseHistory,
+      addUserMessage,
+      removeRecoveryMessageId,
+    }: {
+      userInput: string;
+      baseHistory: HistoryItem[];
+      addUserMessage: boolean;
+      removeRecoveryMessageId?: string;
+    }): Promise<{ ok: boolean; aborted?: boolean }> => {
       setError(null);
       setAwaitingInitiative(false);
       setPendingRolls([]);
 
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: userInput,
-      };
+      const userMsg: Message | null = addUserMessage
+        ? {
+            id: crypto.randomUUID(),
+            role: "user",
+            content: userInput,
+          }
+        : null;
+
       const assistantMsgId = crypto.randomUUID();
       const assistantMsg: Message = {
         id: assistantMsgId,
@@ -145,10 +203,15 @@ export function useChat(sessionId: string) {
         streaming: true,
       };
 
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setMessages((prev) => {
+        let next = prev;
+        if (removeRecoveryMessageId) {
+          next = next.filter((m) => m.id !== removeRecoveryMessageId);
+        }
+        if (userMsg) next = [...next, userMsg];
+        return [...next, assistantMsg];
+      });
       setIsStreaming(true);
-
-      const history = messages.map(({ role, content }) => ({ role, content }));
       abortRef.current = new AbortController();
 
       try {
@@ -156,7 +219,11 @@ export function useChat(sessionId: string) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: abortRef.current.signal,
-          body: JSON.stringify({ sessionId, message: userInput, history }),
+          body: JSON.stringify({
+            sessionId,
+            message: userInput,
+            history: baseHistory,
+          }),
         });
 
         if (!res.ok) throw new Error(`Request failed: ${res.statusText}`);
@@ -199,7 +266,6 @@ export function useChat(sessionId: string) {
 
               if (parsed.done) {
                 setParsedDM(parseDMResponse(fullResponse));
-
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantMsgId ? { ...m, streaming: false } : m,
@@ -217,18 +283,107 @@ export function useChat(sessionId: string) {
             }
           }
         }
+
+        setFailedTurn(null);
+        return { ok: true };
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if ((err as Error).name === "AbortError") {
+          return { ok: false, aborted: true };
+        }
+
         const msg = err instanceof Error ? err.message : "Something went wrong";
+        const recoveryMessageId = crypto.randomUUID();
         setError(msg);
-        setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
+        setFailedTurn({
+          input: userInput,
+          baseHistory,
+          recoveryMessageId,
+        });
+        setMessages((prev) => {
+          const withoutStreaming = prev.filter((m) => m.id !== assistantMsgId);
+          const recoveryMessage: Message = {
+            id: recoveryMessageId,
+            role: "assistant",
+            content: buildRecoveryMessage(queuedInputs.length + 1),
+          };
+          return [...withoutStreaming, recoveryMessage];
+        });
+
+        return { ok: false };
       } finally {
         setIsStreaming(false);
         abortRef.current = null;
       }
     },
-    [sessionId, messages, isStreaming],
+    [sessionId, buildRecoveryMessage, queuedInputs.length],
   );
+
+  const processNextQueuedInput = useCallback(async () => {
+    if (isStreaming || failedTurn) return;
+
+    let next: QueuedInput | null = null;
+    setQueuedInputs((prev) => {
+      if (prev.length === 0) return prev;
+      [next] = prev;
+      return prev.slice(1);
+    });
+
+    if (!next) return;
+
+    const result = await runTurn({
+      userInput: next.content,
+      baseHistory: messagesRef.current,
+      addUserMessage: true,
+    });
+
+    if (result.ok) {
+      void processNextQueuedInput();
+    }
+  }, [isStreaming, failedTurn, runTurn]);
+
+  const sendMessage = useCallback(
+    async (userInput: string) => {
+      const trimmed = userInput.trim();
+      if (!trimmed) return;
+
+      if (isStreaming || failedTurn) {
+        setQueuedInputs((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), content: trimmed },
+        ]);
+        return;
+      }
+
+      const baseHistory = messages.map(({ role, content }) => ({
+        role,
+        content,
+      })) as HistoryItem[];
+
+      const result = await runTurn({
+        userInput: trimmed,
+        baseHistory,
+        addUserMessage: true,
+      });
+      if (result.ok) {
+        void processNextQueuedInput();
+      }
+    },
+    [isStreaming, failedTurn, messages, runTurn, processNextQueuedInput],
+  );
+
+  const retryLastTurn = useCallback(async () => {
+    if (!failedTurn || isStreaming) return;
+
+    const result = await runTurn({
+      userInput: failedTurn.input,
+      baseHistory: failedTurn.baseHistory,
+      addUserMessage: false,
+      removeRecoveryMessageId: failedTurn.recoveryMessageId,
+    });
+    if (result.ok) {
+      void processNextQueuedInput();
+    }
+  }, [failedTurn, isStreaming, runTurn, processNextQueuedInput]);
 
   const cancelStream = useCallback(() => {
     abortRef.current?.abort();
@@ -237,6 +392,8 @@ export function useChat(sessionId: string) {
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
+    setQueuedInputs([]);
+    setFailedTurn(null);
   }, []);
 
   const dismissInitiative = useCallback(() => {
@@ -254,6 +411,10 @@ export function useChat(sessionId: string) {
     parsedDM,
     error,
     sendMessage,
+    retryLastTurn,
+    canRetryLastTurn: Boolean(failedTurn) && !isStreaming,
+    queuedInputCount: queuedInputs.length + (failedTurn ? 1 : 0),
+    isRecovering: Boolean(failedTurn),
     cancelStream,
     clearMessages,
     awaitingInitiative,

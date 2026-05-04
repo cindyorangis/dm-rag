@@ -21,6 +21,10 @@ export default function SessionPage() {
     parsedDM,
     error,
     sendMessage,
+    retryLastTurn,
+    canRetryLastTurn,
+    queuedInputCount,
+    isRecovering,
     cancelStream,
     awaitingInitiative,
     dismissInitiative,
@@ -266,7 +270,26 @@ export default function SessionPage() {
           )}
 
           {error && (
-            <p className="text-center text-base text-red-300">{error}</p>
+            <div className="mx-auto max-w-3xl rounded-lg border border-amber-700/60 bg-amber-950/40 p-3 text-center">
+              <p className="text-sm text-amber-100">
+                DM is recovering. Your turn state is preserved.
+              </p>
+              <p className="mt-1 text-xs text-amber-200/80">{error}</p>
+              <div className="mt-3 flex items-center justify-center gap-2">
+                <button
+                  onClick={retryLastTurn}
+                  disabled={!canRetryLastTurn}
+                  className="rounded-md bg-amber-700 px-3 py-1.5 text-xs text-white transition-colors hover:bg-amber-600 disabled:opacity-40"
+                >
+                  Retry Turn
+                </button>
+                {queuedInputCount > 0 && (
+                  <span className="rounded border border-amber-700/70 px-2 py-1 text-[10px] uppercase tracking-[0.08em] text-amber-200">
+                    Queued: {queuedInputCount}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
           <div ref={bottomRef} />
         </div>
@@ -307,6 +330,11 @@ export default function SessionPage() {
                 </button>
               )}
             </div>
+          )}
+          {isRecovering && queuedInputCount > 0 && (
+            <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-amber-200/80">
+              New actions are queued while the DM recovers.
+            </p>
           )}
         </div>
       </div>

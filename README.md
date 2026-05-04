@@ -276,6 +276,19 @@ See [docs/RAG_EVALS.md](docs/RAG_EVALS.md) for details.
 
 ---
 
+## Failure Recovery UX
+
+If a turn fails due to LLM/RAG/API issues, the session now:
+
+- shows a "DM is recovering" assistant response
+- preserves the failed player action for retry
+- queues additional player actions while recovery is in progress
+- supports one-click **Retry Turn** without losing turn continuity
+
+Implementation details are documented in [docs/GAME_MECHANICS.md](docs/GAME_MECHANICS.md).
+
+---
+
 ## Build Status
 
 | Phase | Description                                                         | Status      |
