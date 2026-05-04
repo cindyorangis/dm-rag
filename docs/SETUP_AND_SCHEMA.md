@@ -18,10 +18,10 @@ id, document_id, content, embedding (vector), page
 
 ### sessions
 
-One row per play session. Stores session title, status, character context, the active adventure slug, generated journal entry, and rolling memory-compression state for long chats.
+One row per play session. Stores session title, status, character context, the active adventure slug, generated journal entry, and rolling memory-compression state for long chats (both narrative and structured memory).
 
 ```
-id, user_id, title, created_at, journal_entry, status, character_context, adventure_slug, narrative_flags, memory_summary, memory_summary_message_count
+id, user_id, title, created_at, journal_entry, status, character_context, adventure_slug, narrative_flags, memory_summary, memory_structured, memory_summary_message_count
 ```
 
 ### characters
@@ -203,6 +203,7 @@ alter table sessions add column if not exists character_context text;
 alter table sessions add column if not exists adventure_slug text default 'lost-mine-of-phandelver';
 alter table sessions add column if not exists narrative_flags jsonb default '{}'::jsonb;
 alter table sessions add column if not exists memory_summary text;
+alter table sessions add column if not exists memory_structured jsonb default '{}'::jsonb;
 alter table sessions add column if not exists memory_summary_message_count int not null default 0;
 ```
 

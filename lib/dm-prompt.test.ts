@@ -176,6 +176,51 @@ describe("DM Prompt Builder", () => {
       expect(prompt).toContain("--- SESSION MEMORY (COMPRESSED) ---");
       expect(prompt).toContain("Active quest: Find Gundren");
     });
+
+    it("includes structured memory when provided", () => {
+      const prompt = buildDMSystemPrompt({
+        retrievedChunks: [],
+        combatState: null,
+        structuredMemory: {
+          active_quests: [
+            {
+              name: "Find Gundren",
+              status: "active",
+              progress: "Following goblin tracks toward Cragmaw.",
+              priority: "high",
+            },
+          ],
+          npc_trust: [
+            {
+              npc: "Sildar Hallwinter",
+              trust: "friendly",
+              basis: "You rescued him from the hideout.",
+            },
+          ],
+          inventory_changes: [
+            {
+              item: "Potion of Healing",
+              change: "gained",
+              quantity: "1",
+              note: "Looted from Klarg's chest.",
+            },
+          ],
+          unresolved_hooks: [
+            {
+              hook: "Who controls the Black Spider network?",
+              urgency: "medium",
+              note: "Still no confirmed identity.",
+            },
+          ],
+        },
+      });
+
+      expect(prompt).toContain("--- SESSION MEMORY (STRUCTURED) ---");
+      expect(prompt).toContain("ACTIVE QUESTS:");
+      expect(prompt).toContain("NPC TRUST:");
+      expect(prompt).toContain("INVENTORY CHANGES:");
+      expect(prompt).toContain("UNRESOLVED HOOKS:");
+    });
   });
 
   describe("buildCombatStartPrompt", () => {

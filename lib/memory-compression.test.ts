@@ -40,6 +40,7 @@ describe("compressConversationHistory", () => {
     expect(result.summaryWasUpdated).toBe(false);
     expect(result.messagesForModel).toEqual(history);
     expect(result.summarizedMessageCount).toBe(0);
+    expect(result.structuredMemory).toBeNull();
     expect(createLlmChatCompletion).not.toHaveBeenCalled();
   });
 
@@ -49,7 +50,22 @@ describe("compressConversationHistory", () => {
     process.env.MEMORY_SUMMARY_BATCH_SIZE = "1";
     const history = makeHistory(8);
 
-    vi.mocked(readLlmChatContent).mockResolvedValue("Updated memory summary");
+    vi.mocked(readLlmChatContent).mockResolvedValue(`{
+      "summary": "Updated memory summary",
+      "structured": {
+        "active_quests": [
+          {
+            "name": "Find Gundren",
+            "status": "active",
+            "progress": "Following tracks to Cragmaw.",
+            "priority": "high"
+          }
+        ],
+        "npc_trust": [],
+        "inventory_changes": [],
+        "unresolved_hooks": []
+      }
+    }`);
 
     const result = await compressConversationHistory({
       history,
@@ -60,6 +76,9 @@ describe("compressConversationHistory", () => {
 
     expect(result.summaryWasUpdated).toBe(true);
     expect(result.rollingSummary).toBe("Updated memory summary");
+    expect(result.structuredMemory?.active_quests[0]?.name).toBe(
+      "Find Gundren",
+    );
     expect(result.summarizedMessageCount).toBe(6);
     expect(result.messagesForModel).toEqual(history.slice(6));
     expect(createLlmChatCompletion).toHaveBeenCalledWith(
@@ -80,7 +99,15 @@ describe("compressConversationHistory", () => {
     process.env.MEMORY_SUMMARY_BATCH_SIZE = "1";
     const history = makeHistory(10);
 
-    vi.mocked(readLlmChatContent).mockResolvedValue("Delta summary");
+    vi.mocked(readLlmChatContent).mockResolvedValue(`{
+      "summary": "Delta summary",
+      "structured": {
+        "active_quests": [],
+        "npc_trust": [],
+        "inventory_changes": [],
+        "unresolved_hooks": []
+      }
+    }`);
 
     const result = await compressConversationHistory({
       history,
@@ -118,5 +145,37 @@ describe("compressConversationHistory", () => {
     expect(result.summarizedMessageCount).toBe(6);
     expect(result.messagesForModel).toEqual(history.slice(6));
     expect(createLlmChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("falls back to summary-only when model returns plain text", async () => {
+    process.env.MEMORY_COMPRESSION_MIN_MESSAGES = "4";
+    process.env.MEMORY_COMPRESSION_RECENT_MESSAGES = "2";
+    process.env.MEMORY_SUMMARY_BATCH_SIZE = "1";
+    const history = makeHistory(8);
+
+    vi.mocked(readLlmChatContent).mockResolvedValue("Plain summary response");
+
+    const result = await compressConversationHistory({
+      history,
+      provider: "ollama",
+      rollingSummary: "Old summary",
+      structuredMemory: {
+        active_quests: [
+          {
+            name: "Old quest",
+            status: "active",
+            progress: "In progress",
+            priority: "medium",
+          },
+        ],
+        npc_trust: [],
+        inventory_changes: [],
+        unresolved_hooks: [],
+      },
+      summarizedMessageCount: 0,
+    });
+
+    expect(result.rollingSummary).toBe("Plain summary response");
+    expect(result.structuredMemory?.active_quests[0]?.name).toBe("Old quest");
   });
 });

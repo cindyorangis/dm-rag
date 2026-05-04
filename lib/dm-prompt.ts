@@ -1,4 +1,5 @@
 import type { CombatState, Combatant } from "./combat/types";
+import type { SessionStructuredMemory } from "./memory-compression";
 import type { NarrativeFlags } from "./narrative/flags";
 import { getAdventureMeta } from "./narrative/adventure-meta";
 import { DEATH_RESOLUTION_SCRIPTS } from "./narrative/death-resolutions";
@@ -241,6 +242,7 @@ export interface BuildPromptOptions {
   narrativeFlags?: NarrativeFlags;
   adventureSlug?: string | null;
   rollingSummary?: string | null;
+  structuredMemory?: SessionStructuredMemory | null;
 }
 
 export function buildDMSystemPrompt({
@@ -250,6 +252,7 @@ export function buildDMSystemPrompt({
   narrativeFlags,
   adventureSlug,
   rollingSummary,
+  structuredMemory,
 }: BuildPromptOptions): string {
   const sections: string[] = [buildBasePrompt(adventureSlug)];
 
@@ -263,6 +266,13 @@ export function buildDMSystemPrompt({
   if (rollingSummary?.trim()) {
     sections.push(
       `\n--- SESSION MEMORY (COMPRESSED) ---\n${rollingSummary.trim()}`,
+    );
+  }
+
+  const structuredMemorySection = formatStructuredMemory(structuredMemory);
+  if (structuredMemorySection) {
+    sections.push(
+      `\n--- SESSION MEMORY (STRUCTURED) ---\n${structuredMemorySection}`,
     );
   }
 
@@ -313,6 +323,52 @@ Simply confirm that combat has begun and that you are waiting for their initiati
   }
 
   return sections.join("") + "\n" + STATUS_AND_HINTS_INSTRUCTION;
+}
+
+function formatStructuredMemory(
+  memory: SessionStructuredMemory | null | undefined,
+): string {
+  if (!memory) return "";
+
+  const lines: string[] = [];
+
+  if (memory.active_quests.length > 0) {
+    lines.push("ACTIVE QUESTS:");
+    for (const quest of memory.active_quests) {
+      lines.push(
+        `- ${quest.name} [${quest.status}|${quest.priority}]: ${quest.progress}`,
+      );
+    }
+  }
+
+  if (memory.npc_trust.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("NPC TRUST:");
+    for (const npc of memory.npc_trust) {
+      lines.push(`- ${npc.npc} [${npc.trust}]: ${npc.basis}`);
+    }
+  }
+
+  if (memory.inventory_changes.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("INVENTORY CHANGES:");
+    for (const item of memory.inventory_changes) {
+      const quantity = item.quantity ? ` (${item.quantity})` : "";
+      const note = item.note ? ` - ${item.note}` : "";
+      lines.push(`- ${item.item}: ${item.change}${quantity}${note}`);
+    }
+  }
+
+  if (memory.unresolved_hooks.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("UNRESOLVED HOOKS:");
+    for (const hook of memory.unresolved_hooks) {
+      const note = hook.note ? ` - ${hook.note}` : "";
+      lines.push(`- ${hook.hook} [${hook.urgency}]${note}`);
+    }
+  }
+
+  return lines.join("\n").trim();
 }
 
 function normalizeCharacterContext(

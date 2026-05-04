@@ -31,7 +31,10 @@ import {
   parseLlmStreamChunk,
   readLlmError,
 } from "@/lib/llmClient";
-import { compressConversationHistory } from "@/lib/memory-compression";
+import {
+  compressConversationHistory,
+  type SessionStructuredMemory,
+} from "@/lib/memory-compression";
 import {
   applyNarrativeFlagOps,
   parseNarrativeFlagOpsFromText,
@@ -87,6 +90,9 @@ export async function POST(req: NextRequest) {
     typeof sessionRow?.memory_summary === "string"
       ? sessionRow.memory_summary
       : null;
+  let promptStructuredMemory = sanitizeStructuredMemory(
+    sessionRow?.memory_structured,
+  );
   let messagesForModel = conversationHistory;
   const historyWindow = readPositiveIntEnv(
     "CHAT_HISTORY_WINDOW_MESSAGES",
@@ -98,10 +104,12 @@ export async function POST(req: NextRequest) {
       history: conversationHistory,
       provider: llmProvider,
       rollingSummary: promptMemorySummary,
+      structuredMemory: promptStructuredMemory,
       summarizedMessageCount: sessionRow?.memory_summary_message_count ?? 0,
     });
 
     promptMemorySummary = compressed.rollingSummary;
+    promptStructuredMemory = compressed.structuredMemory;
     messagesForModel = takeRecentMessages(
       compressed.messagesForModel,
       historyWindow,
@@ -112,6 +120,7 @@ export async function POST(req: NextRequest) {
         .from("sessions")
         .update({
           memory_summary: compressed.rollingSummary,
+          memory_structured: promptStructuredMemory,
           memory_summary_message_count: compressed.summarizedMessageCount,
         })
         .eq("id", sessionId);
@@ -132,6 +141,7 @@ export async function POST(req: NextRequest) {
     adventureSlug,
     characterContext: sessionRow?.character_context ?? null,
     rollingSummary: promptMemorySummary,
+    structuredMemory: promptStructuredMemory,
   });
 
   // 5. Build messages array
@@ -378,12 +388,13 @@ async function loadSessionContext(
     adventure_slug?: string | null;
     character_context?: string | null;
     memory_summary?: string | null;
+    memory_structured?: SessionStructuredMemory | null;
     memory_summary_message_count?: number | null;
   } | null;
   memoryColumnsAvailable: boolean;
 }> {
   const withMemoryColumns =
-    "narrative_flags, adventure_slug, character_context, memory_summary, memory_summary_message_count";
+    "narrative_flags, adventure_slug, character_context, memory_summary, memory_structured, memory_summary_message_count";
   const fallbackColumns = "narrative_flags, adventure_slug, character_context";
 
   const withMemory = await supabase
@@ -418,6 +429,22 @@ async function loadSessionContext(
   return {
     data: fallback.data ?? null,
     memoryColumnsAvailable: false,
+  };
+}
+
+function sanitizeStructuredMemory(
+  value: unknown,
+): SessionStructuredMemory | null {
+  if (!value || typeof value !== "object") return null;
+  const memory = value as SessionStructuredMemory;
+  const safeArray = <T>(input: unknown): T[] =>
+    Array.isArray(input) ? input : [];
+
+  return {
+    active_quests: safeArray(memory.active_quests),
+    npc_trust: safeArray(memory.npc_trust),
+    inventory_changes: safeArray(memory.inventory_changes),
+    unresolved_hooks: safeArray(memory.unresolved_hooks),
   };
 }
 
