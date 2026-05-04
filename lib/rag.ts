@@ -140,7 +140,7 @@ export async function calculateKeywordScores(
 export async function retrieveChunks(
   query: string,
   adventureSlug: string,
-  matchCount = 6,
+  matchCount = readMaxChunks(),
   config: RAGRetrievalConfig = {},
 ): Promise<RAGChunk[]> {
   const {
@@ -260,13 +260,24 @@ export async function retrieveChunks(
     }))
     .sort((a, b) => b.similarity - a.similarity);
 
+  const thresholdedCandidates = applySimilarityThreshold(
+    blended,
+    readSimilarityThreshold(),
+  );
+
   const reranked = await rerankResults(
     query,
-    blended.slice(0, Math.max(matchCount, topKForReRank)),
+    thresholdedCandidates.slice(0, Math.max(matchCount, topKForReRank)),
     matchCount,
   );
 
-  return reranked.map(({ score: _score, ...chunk }) => chunk);
+  return reranked.map((chunk) => ({
+    id: chunk.id,
+    content: chunk.content,
+    similarity: chunk.similarity,
+    section: chunk.section,
+    adventureId: chunk.adventureId,
+  }));
 }
 
 // ── Re-ranking ─────────────────────────────────────────────────────────────
@@ -355,13 +366,40 @@ function normalizeByMinMax(values: number[]): number[] {
   return values.map((value) => (value - min) / (max - min));
 }
 
+function readMaxChunks(): number {
+  const raw = process.env.RAG_MAX_CHUNKS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 12) {
+    return parsed;
+  }
+  return 4;
+}
+
+function readSimilarityThreshold(): number {
+  const raw = process.env.RAG_MIN_SIMILARITY;
+  const parsed = raw ? Number.parseFloat(raw) : NaN;
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+    return parsed;
+  }
+  return 0.2;
+}
+
+function applySimilarityThreshold(
+  chunks: RAGChunk[],
+  threshold: number,
+): RAGChunk[] {
+  if (chunks.length <= 1 || threshold <= 0) return chunks;
+  const filtered = chunks.filter((chunk) => chunk.similarity >= threshold);
+  return filtered.length > 0 ? filtered : chunks.slice(0, 1);
+}
+
 // ── Fallbacks ──────────────────────────────────────────────────────────────
 
 /** Vector-only retrieval — legacy fallback. */
 export async function retrieveChunksVectorOnly(
   query: string,
   adventureSlug: string,
-  matchCount = 6,
+  matchCount = readMaxChunks(),
 ): Promise<RAGChunk[]> {
   const results = await performVectorSearch(query, adventureSlug, matchCount);
   return results.map((chunk) => ({
@@ -375,7 +413,7 @@ export async function retrieveChunksVectorOnly(
 export async function retrieveChunksKeywordOnly(
   query: string,
   adventureSlug: string,
-  matchCount = 6,
+  matchCount = readMaxChunks(),
 ): Promise<RAGChunk[]> {
   const results = await calculateKeywordScores(
     query,

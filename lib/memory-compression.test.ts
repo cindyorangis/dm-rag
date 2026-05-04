@@ -24,6 +24,7 @@ describe("compressConversationHistory", () => {
     vi.clearAllMocks();
     delete process.env.MEMORY_COMPRESSION_MIN_MESSAGES;
     delete process.env.MEMORY_COMPRESSION_RECENT_MESSAGES;
+    delete process.env.MEMORY_SUMMARY_BATCH_SIZE;
   });
 
   it("keeps unsummarized history untouched when below compression threshold", async () => {
@@ -45,6 +46,7 @@ describe("compressConversationHistory", () => {
   it("summarizes newly archivable messages and keeps a recent tail", async () => {
     process.env.MEMORY_COMPRESSION_MIN_MESSAGES = "4";
     process.env.MEMORY_COMPRESSION_RECENT_MESSAGES = "2";
+    process.env.MEMORY_SUMMARY_BATCH_SIZE = "1";
     const history = makeHistory(8);
 
     vi.mocked(readLlmChatContent).mockResolvedValue("Updated memory summary");
@@ -75,6 +77,7 @@ describe("compressConversationHistory", () => {
   it("only summarizes the delta after a previous compression", async () => {
     process.env.MEMORY_COMPRESSION_MIN_MESSAGES = "4";
     process.env.MEMORY_COMPRESSION_RECENT_MESSAGES = "2";
+    process.env.MEMORY_SUMMARY_BATCH_SIZE = "1";
     const history = makeHistory(10);
 
     vi.mocked(readLlmChatContent).mockResolvedValue("Delta summary");
@@ -96,5 +99,24 @@ describe("compressConversationHistory", () => {
     expect(prompt).toContain("message-6");
     expect(prompt).toContain("message-7");
     expect(prompt).not.toContain("message-2");
+  });
+
+  it("defers summary updates until batch size is reached", async () => {
+    process.env.MEMORY_COMPRESSION_MIN_MESSAGES = "4";
+    process.env.MEMORY_COMPRESSION_RECENT_MESSAGES = "2";
+    process.env.MEMORY_SUMMARY_BATCH_SIZE = "4";
+    const history = makeHistory(10);
+
+    const result = await compressConversationHistory({
+      history,
+      provider: "ollama",
+      rollingSummary: "Existing memory",
+      summarizedMessageCount: 6,
+    });
+
+    expect(result.summaryWasUpdated).toBe(false);
+    expect(result.summarizedMessageCount).toBe(6);
+    expect(result.messagesForModel).toEqual(history.slice(6));
+    expect(createLlmChatCompletion).not.toHaveBeenCalled();
   });
 });

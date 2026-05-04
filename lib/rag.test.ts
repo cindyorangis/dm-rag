@@ -498,12 +498,28 @@ describe("retrieveChunks", () => {
   it("falls back gracefully and returns [] in production when hybrid search throws", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.mocked(fetch).mockRejectedValueOnce(new Error("Embedding service down"));
+    vi.mocked(fetch).mockRejectedValue(new Error("Embedding service down"));
+    mockRpc.mockResolvedValue(rpcOk([]));
 
     const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
 
     expect(results).toEqual([]);
     consoleSpy.mockRestore();
+  });
+
+  it("applies similarity threshold and falls back to top chunk when all are below", async () => {
+    vi.stubEnv("RAG_MIN_SIMILARITY", "0.99");
+    mockRpc.mockImplementation((async (rpcName: string) => {
+      if (rpcName === "match_chunks_scoped") {
+        return rpcOk(MOCK_VECTOR_RESULTS);
+      }
+      if (rpcName === "match_chunks_scoped_keywords") {
+        return rpcOk([]);
+      }
+    }) as unknown as typeof supabaseAdmin.rpc);
+
+    const results = await retrieveChunks("goblin", MOCK_ADVENTURE_SLUG);
+    expect(results).toHaveLength(1);
   });
 });
 

@@ -5,8 +5,9 @@ import {
   type LlmProvider,
 } from "@/lib/llmClient";
 
-const DEFAULT_MIN_MESSAGES = 20;
-const DEFAULT_RECENT_MESSAGES = 12;
+const DEFAULT_MIN_MESSAGES = 10;
+const DEFAULT_RECENT_MESSAGES = 8;
+const DEFAULT_SUMMARY_BATCH_SIZE = 4;
 const DEFAULT_SUMMARY_MAX_CHARS = 2600;
 const DEFAULT_TRANSCRIPT_MAX_CHARS = 12000;
 const DEFAULT_PER_MESSAGE_MAX_CHARS = 900;
@@ -49,6 +50,10 @@ export async function compressConversationHistory({
     "MEMORY_COMPRESSION_RECENT_MESSAGES",
     DEFAULT_RECENT_MESSAGES,
   );
+  const summaryBatchSize = readPositiveIntEnv(
+    "MEMORY_SUMMARY_BATCH_SIZE",
+    DEFAULT_SUMMARY_BATCH_SIZE,
+  );
 
   const normalizedHistory = normalizeHistory(history);
   const safeSummary = normalizeSummary(rollingSummary);
@@ -74,7 +79,21 @@ export async function compressConversationHistory({
     };
   }
 
-  const nextSummarizedCount = normalizedHistory.length - recentMessages;
+  const maxSummarizedCount = normalizedHistory.length - recentMessages;
+  const archivableCount = maxSummarizedCount - safeCount;
+  const batchedArchiveCount =
+    Math.floor(archivableCount / summaryBatchSize) * summaryBatchSize;
+  const nextSummarizedCount = safeCount + batchedArchiveCount;
+
+  if (batchedArchiveCount <= 0) {
+    return {
+      messagesForModel: unsummarizedMessages,
+      rollingSummary: safeSummary,
+      summarizedMessageCount: safeCount,
+      summaryWasUpdated: false,
+    };
+  }
+
   if (nextSummarizedCount <= safeCount) {
     return {
       messagesForModel: unsummarizedMessages,

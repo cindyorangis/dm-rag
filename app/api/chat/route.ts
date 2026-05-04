@@ -48,6 +48,7 @@ const DEFAULT_PLAYER = {
 };
 
 const DEFAULT_ADVENTURE_SLUG = "lost-mine-of-phandelver";
+const DEFAULT_CHAT_HISTORY_WINDOW = 8;
 
 export async function POST(req: NextRequest) {
   const { sessionId, message, history } = await req.json();
@@ -76,6 +77,10 @@ export async function POST(req: NextRequest) {
       ? sessionRow.memory_summary
       : null;
   let messagesForModel = conversationHistory;
+  const historyWindow = readPositiveIntEnv(
+    "CHAT_HISTORY_WINDOW_MESSAGES",
+    DEFAULT_CHAT_HISTORY_WINDOW,
+  );
 
   try {
     const compressed = await compressConversationHistory({
@@ -86,7 +91,10 @@ export async function POST(req: NextRequest) {
     });
 
     promptMemorySummary = compressed.rollingSummary;
-    messagesForModel = compressed.messagesForModel;
+    messagesForModel = takeRecentMessages(
+      compressed.messagesForModel,
+      historyWindow,
+    );
 
     if (compressed.summaryWasUpdated && sessionContext.memoryColumnsAvailable) {
       await supabase
@@ -102,7 +110,7 @@ export async function POST(req: NextRequest) {
       sessionId,
       error,
     });
-    messagesForModel = conversationHistory;
+    messagesForModel = takeRecentMessages(conversationHistory, historyWindow);
   }
 
   // 4. Build DM system prompt
@@ -334,6 +342,21 @@ function normalizeConversationHistory(history: unknown): LlmMessage[] {
       role: message.role,
       content: message.content,
     }));
+}
+
+function takeRecentMessages(
+  messages: LlmMessage[],
+  maxMessages: number,
+): LlmMessage[] {
+  if (maxMessages <= 0 || messages.length <= maxMessages) return messages;
+  return messages.slice(-maxMessages);
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function updateNarrativeFlagsFromDmResponse({

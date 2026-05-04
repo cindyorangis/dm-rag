@@ -75,7 +75,7 @@ function formatCombatState(state: CombatState): string {
   ];
 
   if (state.log.length > 0) {
-    const recent = state.log.slice(-5);
+    const recent = state.log.slice(-3);
     lines.push(``, `RECENT ACTIONS:`);
     recent.forEach((entry) => {
       lines.push(
@@ -222,25 +222,6 @@ REQUIRED FORMAT — append these two blocks at the end of EVERY response, no exc
 [lore] <short label> | <full sentence the player would say or do>
 [/HINTS]
 
-EXAMPLE of a correctly formatted response:
----
-You push open the heavy oak door of the Stonehill Inn. The common room is warm and smoky, filled with tired farmers nursing their ales. The innkeeper, a stout dwarf named Toblen, looks up as you enter.
-
-[STATUS]
-* You have just arrived in Phandalin for the first time.
-* The Redbrands are terrorizing the town and have been seen near Tresendar Manor.
-* Toblen Stonehill may know useful information about local troubles.
-[/STATUS]
-
-[HINTS]
-[social] Ask Toblen about the Redbrands | I lean on the bar and ask Toblen what he knows about the Redbrands causing trouble in town.
-[explore] Look around the common room | I scan the room to see who else is here and if anyone looks like they might have useful information.
-[lore] Ask about Phandalin's history | I ask Toblen how long he's lived here and what Phandalin was like before the Redbrands showed up.
-[action] Get a room for the night | I ask Toblen for a room and a meal — I need to rest before doing anything else.
-[/HINTS]
----
-END EXAMPLE
-
 Your response must end with [STATUS]...[/STATUS] followed immediately by [HINTS]...[/HINTS]. Never omit either block.
 
 When the player makes a meaningful choice with long-term consequences, append a hidden [FLAG_OPS] JSON block AFTER [/HINTS].
@@ -273,11 +254,11 @@ export function buildDMSystemPrompt({
   const sections: string[] = [buildBasePrompt(adventureSlug)];
 
   // Character context
-  sections.push(
-    `\n--- PLAYER CHARACTER ---\n${
-      characterContext ?? buildFallbackCharacter(adventureSlug)
-    }`,
+  const normalizedCharacterContext = normalizeCharacterContext(
+    characterContext,
+    adventureSlug,
   );
+  sections.push(`\n--- PLAYER CHARACTER ---\n${normalizedCharacterContext}`);
 
   if (rollingSummary?.trim()) {
     sections.push(
@@ -332,6 +313,27 @@ Simply confirm that combat has begun and that you are waiting for their initiati
   }
 
   return sections.join("") + "\n" + STATUS_AND_HINTS_INSTRUCTION;
+}
+
+function normalizeCharacterContext(
+  characterContext: string | null | undefined,
+  adventureSlug: string | undefined | null,
+): string {
+  if (!characterContext) {
+    return buildFallbackCharacter(adventureSlug);
+  }
+
+  const maxChars = readPositiveIntEnv("CHARACTER_CONTEXT_MAX_CHARS", 1200);
+  const trimmed = characterContext.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars).trim()}\n...`;
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function buildCombatStartPrompt(combatants: Combatant[]): string {
