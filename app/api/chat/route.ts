@@ -151,7 +151,10 @@ export async function POST(req: NextRequest) {
   });
 
   // 5. Build messages array
-  const messages = [...messagesForModel, { role: "user", content: message }];
+  const messages: LlmMessage[] = [
+    ...messagesForModel,
+    { role: "user", content: String(message) },
+  ];
   const selfCheckEnabled = readBooleanEnv("TURN_SELF_CHECK_ENABLED", true);
   const selfCheckRepairEnabled = readBooleanEnv(
     "TURN_SELF_CHECK_REPAIR_ENABLED",
