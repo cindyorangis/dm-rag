@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_EMBED_MODEL = "mxbai-embed-large";
+const DEFAULT_OLLAMA_RERANK_MODEL = "bge-reranker-v2-m3";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,11 @@ interface RerankResult {
   similarity: number;
   section: string;
   adventureId: string;
+}
+
+interface OllamaRerankItem {
+  index: number;
+  relevance_score: number;
 }
 
 // ── Embedding ──────────────────────────────────────────────────────────────
@@ -143,25 +149,37 @@ export async function retrieveChunks(
     keywordWeight = 0.3,
     topKForReRank = 20,
   } = config;
+  const totalWeight = vectorWeight + keywordWeight;
+  const safeVectorWeight = totalWeight > 0 ? vectorWeight / totalWeight : 0.7;
+  const safeKeywordWeight = totalWeight > 0 ? keywordWeight / totalWeight : 0.3;
 
   let vectorResults: VectorSearchResult[] = [];
   let keywordResults: KeywordSearchResult[] = [];
 
   if (useHybridSearch) {
-    try {
-      [vectorResults, keywordResults] = await Promise.all([
-        performVectorSearch(query, adventureSlug, topKForReRank),
-        calculateKeywordScores(query, adventureSlug, topKForReRank),
-      ]);
-    } catch (error) {
-      if (process.env.NODE_ENV === "production") {
-        console.warn(
-          "Hybrid search unavailable, falling back to vector-only:",
-          error,
-        );
-      } else {
-        throw error;
-      }
+    const [vectorAttempt, keywordAttempt] = await Promise.allSettled([
+      performVectorSearch(query, adventureSlug, topKForReRank),
+      calculateKeywordScores(query, adventureSlug, topKForReRank),
+    ]);
+
+    if (vectorAttempt.status === "fulfilled") {
+      vectorResults = vectorAttempt.value;
+    } else if (process.env.NODE_ENV === "production") {
+      console.warn(
+        "Hybrid vector search failed, continuing with keyword-only:",
+        vectorAttempt.reason,
+      );
+    } else {
+      throw vectorAttempt.reason;
+    }
+
+    if (keywordAttempt.status === "fulfilled") {
+      keywordResults = keywordAttempt.value;
+    } else {
+      console.warn(
+        "Hybrid keyword search failed, continuing with vector-only:",
+        keywordAttempt.reason,
+      );
     }
   } else {
     vectorResults = await performVectorSearch(
@@ -171,48 +189,84 @@ export async function retrieveChunks(
     );
   }
 
+  // Explicit fallback: if hybrid produced nothing, try vector-only once.
+  if (
+    useHybridSearch &&
+    vectorResults.length === 0 &&
+    keywordResults.length === 0
+  ) {
+    vectorResults = await performVectorSearch(
+      query,
+      adventureSlug,
+      topKForReRank,
+    );
+  }
+
+  if (vectorResults.length === 0 && keywordResults.length === 0) {
+    return [];
+  }
+
+  const normalizedVectorScores = normalizeByMinMax(
+    vectorResults.map((r) => r.similarity),
+  );
+  const maxKeywordScore =
+    keywordResults.length > 0
+      ? Math.max(...keywordResults.map((r) => Math.max(0, r.score)))
+      : 0;
+
   // Merge vector and keyword results, boosting chunks that appear in both
   const combinedMap = new Map<string, CombinedResult>();
 
-  for (const result of vectorResults) {
+  for (const [idx, result] of vectorResults.entries()) {
     combinedMap.set(result.id, {
       id: result.id,
-      vectorScore: Math.min(result.similarity, 1.0),
+      vectorScore: normalizedVectorScores[idx] ?? 0,
       keywordScore: 0,
       content: result.content,
     });
   }
 
   for (const result of keywordResults) {
+    const normalizedKeywordScore =
+      maxKeywordScore > 0 ? Math.max(0, result.score) / maxKeywordScore : 0;
+
     const existing = combinedMap.get(result.id);
     if (!existing) {
       combinedMap.set(result.id, {
         id: result.id,
         vectorScore: 0,
-        keywordScore: result.score,
+        keywordScore: normalizedKeywordScore,
         content: result.content,
       });
-    } else if (result.score > 0.3) {
+    } else if (normalizedKeywordScore > 0.3) {
       const boost = 1.2;
       combinedMap.set(result.id, {
         ...existing,
         vectorScore: existing.vectorScore,
-        keywordScore: result.score * boost,
+        keywordScore: normalizedKeywordScore * boost,
       });
     }
   }
 
-  return Array.from(combinedMap.values())
+  const blended = Array.from(combinedMap.values())
     .map((item) => ({
       id: item.id,
       content: item.content,
       similarity:
-        item.vectorScore * vectorWeight + item.keywordScore * keywordWeight,
+        item.vectorScore * safeVectorWeight +
+        item.keywordScore * safeKeywordWeight,
       section: item.content.split("\n")[0] || "General",
       adventureId: adventureSlug,
     }))
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, matchCount);
+    .sort((a, b) => b.similarity - a.similarity);
+
+  const reranked = await rerankResults(
+    query,
+    blended.slice(0, Math.max(matchCount, topKForReRank)),
+    matchCount,
+  );
+
+  return reranked.map(({ score: _score, ...chunk }) => chunk);
 }
 
 // ── Re-ranking ─────────────────────────────────────────────────────────────
@@ -226,10 +280,56 @@ export async function rerankResults(
   results: RAGChunk[],
   topN = 3,
 ): Promise<RerankResult[]> {
+  if (results.length === 0) return [];
+
+  const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
+  const rerankModel =
+    process.env.OLLAMA_RERANK_MODEL || DEFAULT_OLLAMA_RERANK_MODEL;
+
+  try {
+    const res = await fetch(`${baseUrl}/api/rerank`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: rerankModel,
+        query,
+        top_n: topN,
+        documents: results.map((r) => r.content),
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Ollama rerank failed: ${res.statusText}`);
+    }
+
+    const data = (await res.json()) as { results?: OllamaRerankItem[] };
+    const rerankItems = data.results ?? [];
+
+    const mapped = rerankItems
+      .map((item) => {
+        const original = results[item.index];
+        if (!original) return null;
+        const score = item.relevance_score;
+        return {
+          ...original,
+          score,
+          similarity: score,
+        } satisfies RerankResult;
+      })
+      .filter((item): item is RerankResult => item !== null);
+
+    if (mapped.length > 0) {
+      return mapped;
+    }
+  } catch (error) {
+    console.warn("Re-ranking unavailable, using blended score order:", error);
+  }
+
   return results
-    .map((r) => ({ ...r, score: r.similarity }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topN);
+    .slice()
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topN)
+    .map((r) => ({ ...r, score: r.similarity }));
 }
 
 /** Retrieve then re-rank in one call. */
@@ -240,13 +340,19 @@ export async function retrieveChunksWithReRank(
   finalMatchCount = 3,
   config: RAGRetrievalConfig = {},
 ): Promise<RerankResult[]> {
-  const initial = await retrieveChunks(
-    query,
-    adventureSlug,
-    initialMatchCount,
-    config,
-  );
-  return rerankResults(query, initial, finalMatchCount);
+  const initial = await retrieveChunks(query, adventureSlug, finalMatchCount, {
+    ...config,
+    topKForReRank: initialMatchCount,
+  });
+  return initial.map((r) => ({ ...r, score: r.similarity }));
+}
+
+function normalizeByMinMax(values: number[]): number[] {
+  if (values.length === 0) return [];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return values.map(() => 1);
+  return values.map((value) => (value - min) / (max - min));
 }
 
 // ── Fallbacks ──────────────────────────────────────────────────────────────

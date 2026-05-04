@@ -109,9 +109,38 @@ def get_embedding(text: str) -> list[float]:
     return result.embeddings[0]
 
 
-def document_already_ingested(title: str) -> bool:
-    result = supabase.table("documents").select("id").eq("title", title).execute()
+def find_document(title: str, category: str, adventure_slug: str | None) -> dict | None:
+    query = (
+        supabase.table("documents")
+        .select("id")
+        .eq("title", title)
+        .eq("category", category)
+    )
+    if adventure_slug is None:
+        query = query.filter("adventure_slug", "is", "null")
+    else:
+        query = query.eq("adventure_slug", adventure_slug)
+
+    result = query.limit(1).execute()
+    if result.data:
+        return result.data[0]
+    return None
+
+
+def has_any_chunks(document_id: str) -> bool:
+    result = (
+        supabase.table("chunks")
+        .select("id")
+        .eq("document_id", document_id)
+        .limit(1)
+        .execute()
+    )
     return len(result.data) > 0
+
+
+def cleanup_failed_document(document_id: str):
+    supabase.table("chunks").delete().eq("document_id", document_id).execute()
+    supabase.table("documents").delete().eq("id", document_id).execute()
 
 
 # ── Main Processing ────────────────────────────────────────────────────────
@@ -119,9 +148,20 @@ def document_already_ingested(title: str) -> bool:
 
 def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
     title = pdf_path.name
-    if document_already_ingested(title):
-        print(f"  ⚠️  {title} already ingested, skipping.")
-        return
+    existing = find_document(title, category, adventure_slug)
+    if existing:
+        existing_id = existing["id"]
+        if has_any_chunks(existing_id):
+            print(
+                f"  ⚠️  {title} already ingested for {category}/{adventure_slug or 'N/A'}, skipping."
+            )
+            return
+        print(
+            f"  ↻ Found incomplete ingest for {title} ({category} / {adventure_slug or 'N/A'}), resuming."
+        )
+        doc_id = existing_id
+    else:
+        doc_id = None
 
     print(f"  Processing: {title} ({category} / {adventure_slug or 'N/A'})")
 
@@ -137,19 +177,20 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
             print(f"      e.g. {repr(sample[:60])}")
 
     # 3. Insert document record
-    doc_result = (
-        supabase.table("documents")
-        .insert(
-            {
-                "title": title,
-                "type": "rulebook",
-                "category": category,
-                "adventure_slug": adventure_slug,
-            }
+    if not doc_id:
+        doc_result = (
+            supabase.table("documents")
+            .insert(
+                {
+                    "title": title,
+                    "type": "rulebook",
+                    "category": category,
+                    "adventure_slug": adventure_slug,
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
-    doc_id = doc_result.data[0]["id"]
+        doc_id = doc_result.data[0]["id"]
 
     # 4. Chunk all pages
     all_docs: list[Document] = []
@@ -167,6 +208,7 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
     # 5. Embed and insert chunks
     inserted = 0
     skipped = 0
+    failed = 0
     for i, doc in enumerate(all_docs):
         # Skip chunks that are too short to be useful
         if len(doc.page_content.strip()) < 30:
@@ -191,6 +233,14 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
 
         except Exception as e:
             print(f"\n  ❌ Error on chunk {i + 1}: {e}")
+            failed += 1
+
+    if failed > 0:
+        print(
+            f"  ⚠️  Ingestion failed for {title}: {failed} chunk errors. Cleaning up partial rows so rerun is safe."
+        )
+        cleanup_failed_document(doc_id)
+        return
 
     print(f"  ✅ Done — {inserted} inserted, {skipped} skipped (too short).")
 
