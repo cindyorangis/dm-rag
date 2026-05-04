@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest",
+    "eval:rag": "tsx scripts/run-rag-evals.ts",
     "format:check": "prettier --check .",
     "format:write": "prettier --write ."
   },

@@ -25,6 +25,18 @@ export interface RAGChunk {
   adventureId: string;
 }
 
+export type RetrievalConfidenceLevel = "high" | "medium" | "low";
+
+export interface RetrievalConfidence {
+  score: number;
+  level: RetrievalConfidenceLevel;
+  reason: string;
+  chunkCount: number;
+  requestedChunkCount: number;
+  avgSimilarity: number | null;
+  maxSimilarity: number | null;
+}
+
 interface VectorSearchResult {
   id: string;
   content: string;
@@ -358,12 +370,87 @@ export async function retrieveChunksWithReRank(
   return initial.map((r) => ({ ...r, score: r.similarity }));
 }
 
+export function calculateRetrievalConfidence(params: {
+  similarities: number[];
+  requestedChunkCount?: number;
+  minSimilarityThreshold?: number;
+}): RetrievalConfidence {
+  const similarities = params.similarities.filter((value) =>
+    Number.isFinite(value),
+  );
+  const requestedChunkCount = Math.max(
+    1,
+    params.requestedChunkCount ?? readMaxChunks(),
+  );
+  const threshold = params.minSimilarityThreshold ?? readSimilarityThreshold();
+
+  if (similarities.length === 0) {
+    return {
+      score: 0,
+      level: "low",
+      reason: "No relevant retrieval matches were returned.",
+      chunkCount: 0,
+      requestedChunkCount,
+      avgSimilarity: null,
+      maxSimilarity: null,
+    };
+  }
+
+  const chunkCount = similarities.length;
+  const avgSimilarity = average(similarities);
+  const maxSimilarity = Math.max(...similarities);
+  const aboveThreshold = similarities.filter((s) => s >= threshold).length;
+  const hitRate = Math.min(1, chunkCount / requestedChunkCount);
+  const thresholdRate = aboveThreshold / chunkCount;
+
+  const score = round(
+    avgSimilarity * 0.45 +
+      maxSimilarity * 0.25 +
+      hitRate * 0.15 +
+      thresholdRate * 0.15,
+  );
+
+  const lowThreshold = readBoundedFloatEnv(
+    "RAG_CONFIDENCE_LOW_THRESHOLD",
+    0.38,
+  );
+  const highThreshold = readBoundedFloatEnv(
+    "RAG_CONFIDENCE_HIGH_THRESHOLD",
+    0.68,
+  );
+
+  const level: RetrievalConfidenceLevel =
+    score >= highThreshold ? "high" : score <= lowThreshold ? "low" : "medium";
+
+  const reason =
+    level === "high"
+      ? "Retrieved chunks are strong and consistent with the query."
+      : level === "medium"
+        ? "Retrieved context is partial; keep claims grounded to cited details."
+        : "Retrieved context is weak; ask a clarifying question before asserting specific lore/rules.";
+
+  return {
+    score,
+    level,
+    reason,
+    chunkCount,
+    requestedChunkCount,
+    avgSimilarity: round(avgSimilarity),
+    maxSimilarity: round(maxSimilarity),
+  };
+}
+
 function normalizeByMinMax(values: number[]): number[] {
   if (values.length === 0) return [];
   const min = Math.min(...values);
   const max = Math.max(...values);
   if (max === min) return values.map(() => 1);
   return values.map((value) => (value - min) / (max - min));
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function readMaxChunks(): number {
@@ -384,6 +471,15 @@ function readSimilarityThreshold(): number {
   return 0.2;
 }
 
+function readBoundedFloatEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = raw ? Number.parseFloat(raw) : NaN;
+  if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+    return parsed;
+  }
+  return fallback;
+}
+
 function applySimilarityThreshold(
   chunks: RAGChunk[],
   threshold: number,
@@ -391,6 +487,10 @@ function applySimilarityThreshold(
   if (chunks.length <= 1 || threshold <= 0) return chunks;
   const filtered = chunks.filter((chunk) => chunk.similarity >= threshold);
   return filtered.length > 0 ? filtered : chunks.slice(0, 1);
+}
+
+function round(value: number): number {
+  return Number(value.toFixed(3));
 }
 
 // ── Fallbacks ──────────────────────────────────────────────────────────────

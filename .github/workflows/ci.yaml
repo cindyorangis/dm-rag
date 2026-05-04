@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20" # Use the version of Node you use locally
+          node-version: "24" # Use the version of Node you use locally
           cache: "npm" # Speeds up installation by caching dependencies
 
       # 3. Install dependencies

@@ -1,6 +1,7 @@
 import type { CombatState, Combatant } from "./combat/types";
 import type { SessionStructuredMemory } from "./memory-compression";
 import type { NarrativeFlags } from "./narrative/flags";
+import type { RetrievalConfidence } from "./rag";
 import { getAdventureMeta } from "./narrative/adventure-meta";
 import { DEATH_RESOLUTION_SCRIPTS } from "./narrative/death-resolutions";
 
@@ -243,6 +244,7 @@ export interface BuildPromptOptions {
   adventureSlug?: string | null;
   rollingSummary?: string | null;
   structuredMemory?: SessionStructuredMemory | null;
+  retrievalConfidence?: RetrievalConfidence | null;
 }
 
 export function buildDMSystemPrompt({
@@ -253,6 +255,7 @@ export function buildDMSystemPrompt({
   adventureSlug,
   rollingSummary,
   structuredMemory,
+  retrievalConfidence,
 }: BuildPromptOptions): string {
   const sections: string[] = [buildBasePrompt(adventureSlug)];
 
@@ -281,6 +284,20 @@ export function buildDMSystemPrompt({
     sections.push(
       `\n--- RETRIEVED RULES & LORE ---\n${retrievedChunks.join("\n\n---\n\n")}`,
     );
+  }
+
+  if (retrievalConfidence) {
+    sections.push(
+      `\n--- RETRIEVAL CONFIDENCE ---\nLevel: ${retrievalConfidence.level.toUpperCase()} (score ${retrievalConfidence.score})\nReason: ${retrievalConfidence.reason}`,
+    );
+
+    if (retrievalConfidence.level === "low") {
+      sections.push(`\n--- LOW CONFIDENCE BEHAVIOR ---
+Your retrieved context is weak this turn.
+- Do NOT invent specific rules, monster stats, quest facts, or named lore details.
+- Ask exactly ONE clarifying question before asserting uncertain facts.
+- Offer cautious, generic options grounded in what is already known.`);
+    }
   }
 
   // Combat state

@@ -221,6 +221,27 @@ describe("DM Prompt Builder", () => {
       expect(prompt).toContain("INVENTORY CHANGES:");
       expect(prompt).toContain("UNRESOLVED HOOKS:");
     });
+
+    it("injects low-confidence guidance when retrieval confidence is low", () => {
+      const prompt = buildDMSystemPrompt({
+        retrievedChunks: [],
+        combatState: null,
+        retrievalConfidence: {
+          score: 0.21,
+          level: "low",
+          reason: "Weak retrieval match.",
+          chunkCount: 1,
+          requestedChunkCount: 4,
+          avgSimilarity: 0.21,
+          maxSimilarity: 0.21,
+        },
+      });
+
+      expect(prompt).toContain("--- RETRIEVAL CONFIDENCE ---");
+      expect(prompt).toContain("Level: LOW");
+      expect(prompt).toContain("--- LOW CONFIDENCE BEHAVIOR ---");
+      expect(prompt).toContain("Ask exactly ONE clarifying question");
+    });
   });
 
   describe("buildCombatStartPrompt", () => {

@@ -263,6 +263,19 @@ The script is idempotent — it checks for existing document titles and skips an
 
 ---
 
+## RAG Evals
+
+Run retrieval benchmark evals against built-in lore/rules queries:
+
+```bash
+npm run eval:rag
+```
+
+The eval runner reports keyword coverage + retrieval confidence per case and exits non-zero on failures.
+See [docs/RAG_EVALS.md](docs/RAG_EVALS.md) for details.
+
+---
+
 ## Build Status
 
 | Phase | Description                                                         | Status      |

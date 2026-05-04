@@ -8,6 +8,7 @@ import {
   retrieveChunksWithReRank,
   retrieveChunksVectorOnly,
   retrieveChunksKeywordOnly,
+  calculateRetrievalConfidence,
   type RAGChunk,
 } from "./rag";
 
@@ -795,5 +796,30 @@ describe("retrieveChunksKeywordOnly", () => {
     );
 
     expect(results[0].adventureId).toBe(MOCK_ADVENTURE_SLUG);
+  });
+});
+
+describe("calculateRetrievalConfidence", () => {
+  it("returns low confidence when no chunks are retrieved", () => {
+    const result = calculateRetrievalConfidence({
+      similarities: [],
+      requestedChunkCount: 4,
+      minSimilarityThreshold: 0.2,
+    });
+
+    expect(result.level).toBe("low");
+    expect(result.score).toBe(0);
+    expect(result.chunkCount).toBe(0);
+  });
+
+  it("returns high confidence for strong retrieval matches", () => {
+    const result = calculateRetrievalConfidence({
+      similarities: [0.91, 0.84, 0.77, 0.72],
+      requestedChunkCount: 4,
+      minSimilarityThreshold: 0.2,
+    });
+
+    expect(result.level).toBe("high");
+    expect(result.score).toBeGreaterThan(0.68);
   });
 });

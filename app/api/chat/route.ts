@@ -23,7 +23,7 @@ import {
   buildEncounterMonstersOnly,
 } from "@/lib/combat/encounters";
 import { v4 as uuidv4 } from "uuid";
-import { retrieveChunks } from "@/lib/rag";
+import { calculateRetrievalConfidence, retrieveChunks } from "@/lib/rag";
 import {
   type LlmMessage,
   createLlmChatStream,
@@ -80,6 +80,11 @@ export async function POST(req: NextRequest) {
   const chunkSimilarities = chunks.map(
     (c: { similarity: number }) => c.similarity,
   );
+  const retrievalConfidence = calculateRetrievalConfidence({
+    similarities: chunkSimilarities,
+    requestedChunkCount: readPositiveIntEnv("RAG_MAX_CHUNKS", 4),
+    minSimilarityThreshold: readBoundedFloatEnv("RAG_MIN_SIMILARITY", 0.2),
+  });
 
   // 3. Load current combat state
   let combatState = await getCombatState(sessionId);
@@ -142,6 +147,7 @@ export async function POST(req: NextRequest) {
     characterContext: sessionRow?.character_context ?? null,
     rollingSummary: promptMemorySummary,
     structuredMemory: promptStructuredMemory,
+    retrievalConfidence,
   });
 
   // 5. Build messages array
@@ -364,6 +370,8 @@ export async function POST(req: NextRequest) {
             done: true,
             awaitingInitiative:
               combatState?.awaiting_player_initiative ?? false,
+            retrievalConfidence: retrievalConfidence.level,
+            retrievalConfidenceScore: retrievalConfidence.score,
           })}\n\n`,
         ),
       );
