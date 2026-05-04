@@ -113,6 +113,7 @@ export function useChat(sessionId: string) {
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<HistoryItem[]>([]);
+  const queuedInputsRef = useRef<QueuedInput[]>([]);
 
   useEffect(() => {
     const loadMessages = async () => {
@@ -321,15 +322,18 @@ ${queuedCount > 0 ? `Queued actions waiting: ${queuedCount}` : ""}`.trim(),
   const processNextQueuedInput = useCallback(async () => {
     if (isStreaming || failedTurn) return;
 
-    let next: QueuedInput | null = null;
-    setQueuedInputs((prev) => {
-      if (prev.length === 0) return prev;
-      [next] = prev;
-      return prev.slice(1);
-    });
+    // 1. Read synchronously from the ref instead of state
+    const queue = queuedInputsRef.current;
+    if (queue.length === 0) return;
 
-    if (!next) return;
+    // 2. Extract the item
+    const next = queue[0];
 
+    // 3. Update both the ref and the state synchronously
+    queuedInputsRef.current = queue.slice(1);
+    setQueuedInputs(queuedInputsRef.current);
+
+    // 4. Run the turn (TypeScript now knows 'next' is a QueuedInput)
     const result = await runTurn({
       userInput: next.content,
       baseHistory: messagesRef.current,
@@ -347,10 +351,14 @@ ${queuedCount > 0 ? `Queued actions waiting: ${queuedCount}` : ""}`.trim(),
       if (!trimmed) return;
 
       if (isStreaming || failedTurn) {
-        setQueuedInputs((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), content: trimmed },
-        ]);
+        setQueuedInputs((prev) => {
+          const nextQueue = [
+            ...prev,
+            { id: crypto.randomUUID(), content: trimmed },
+          ];
+          queuedInputsRef.current = nextQueue; // Sync ref
+          return nextQueue; // Update state for UI
+        });
         return;
       }
 
