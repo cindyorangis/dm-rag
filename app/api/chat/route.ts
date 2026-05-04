@@ -39,6 +39,11 @@ import {
   stripNarrativeFlagOpsBlocks,
 } from "@/lib/narrative/flags";
 import { buildTurnObservabilityMetric } from "@/lib/observability";
+import {
+  isCriticalTurn,
+  runCriticalTurnSelfCheck,
+  shouldRunSelfCheckPreflight,
+} from "@/lib/dm-self-check";
 
 // Constants
 const DEFAULT_PLAYER = {
@@ -131,6 +136,21 @@ export async function POST(req: NextRequest) {
 
   // 5. Build messages array
   const messages = [...messagesForModel, { role: "user", content: message }];
+  const selfCheckEnabled = readBooleanEnv("TURN_SELF_CHECK_ENABLED", true);
+  const selfCheckRepairEnabled = readBooleanEnv(
+    "TURN_SELF_CHECK_REPAIR_ENABLED",
+    true,
+  );
+  const selfCheckStrictMode = readBooleanEnv(
+    "TURN_SELF_CHECK_STRICT_MODE",
+    false,
+  );
+  const bufferForSelfCheck =
+    selfCheckEnabled &&
+    shouldRunSelfCheckPreflight({
+      playerMessage: message,
+      combatState: combatStateAtPrompt,
+    });
 
   // 6. Call LLM
   const llmRes = await createLlmChatStream({
@@ -188,13 +208,15 @@ export async function POST(req: NextRequest) {
 
         for (const token of parsedChunk.tokens) {
           if (token) {
-            if (firstTokenAt === null) {
+            if (!bufferForSelfCheck && firstTokenAt === null) {
               firstTokenAt = Date.now();
             }
             fullResponse += token;
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
-            );
+            if (!bufferForSelfCheck) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
+              );
+            }
           }
         }
 
@@ -220,14 +242,49 @@ export async function POST(req: NextRequest) {
 
         for (const token of parsedRemainder.tokens) {
           if (token) {
-            if (firstTokenAt === null) {
+            if (!bufferForSelfCheck && firstTokenAt === null) {
               firstTokenAt = Date.now();
             }
             fullResponse += token;
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
-            );
+            if (!bufferForSelfCheck) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ token })}\n\n`),
+              );
+            }
           }
+        }
+      }
+
+      if (bufferForSelfCheck) {
+        if (
+          isCriticalTurn({
+            playerMessage: message,
+            dmResponse: fullResponse,
+            combatState: combatStateAtPrompt,
+          })
+        ) {
+          const checked = await runCriticalTurnSelfCheck({
+            provider: llmProvider,
+            context: {
+              playerMessage: message,
+              dmResponse: fullResponse,
+              combatState: combatStateAtPrompt,
+            },
+            repairEnabled: selfCheckRepairEnabled,
+            strictMode: selfCheckStrictMode,
+          });
+          fullResponse = checked.response;
+        }
+
+        if (fullResponse.trim().length > 0) {
+          if (firstTokenAt === null) {
+            firstTokenAt = Date.now();
+          }
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ token: fullResponse })}\n\n`,
+            ),
+          );
         }
       }
 
