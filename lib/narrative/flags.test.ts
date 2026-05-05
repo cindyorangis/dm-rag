@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   sanitizeNarrativeFlags,
   parseNarrativeFlagOpsFromText,
-  sanitizeNarrativeFlagOps,
   applyNarrativeFlagOps,
   stripNarrativeFlagOpsBlocks,
   type NarrativeFlags,

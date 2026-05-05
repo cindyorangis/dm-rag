@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  parseCharacterContext,
-  modifier,
-  type CharacterData,
-} from "./character";
+import { parseCharacterContext, modifier } from "./character";
 
 describe("Character Utilities", () => {
   describe("modifier", () => {

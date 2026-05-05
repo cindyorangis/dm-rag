@@ -14,11 +14,6 @@ const COMBAT_CONFIRM_PATTERNS = [
   /\binitiative order\b/i,
 ];
 
-// Keywords in player message that suggest ending combat
-const COMBAT_END_PATTERNS = [
-  /\b(flee|run away|escape|retreat|disengage and run)\b/i,
-];
-
 // DM confirms combat over
 const COMBAT_OVER_PATTERNS = [
   /\b(combat is over|all enemies (?:are )?(?:defeated|dead|fallen)|victory|enemies? (?:lie|lies) (?:dead|defeated))\b/i,

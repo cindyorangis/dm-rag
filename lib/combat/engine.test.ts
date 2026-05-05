@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   sortByInitiative,
-  rollAllInitiatives,
   createCombatState,
-  getCurrentCombatant,
   advanceTurn,
   applyDamage,
   applyHealing,
