@@ -1,8 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase";
+import { CohereClient } from "cohere-ai";
 
-const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
-const DEFAULT_OLLAMA_EMBED_MODEL = "mxbai-embed-large";
-const DEFAULT_OLLAMA_RERANK_MODEL = "bge-reranker-v2-m3";
+const cohere = new CohereClient({ token: process.env.COHERE_API_KEY });
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -65,27 +64,23 @@ interface RerankResult {
   adventureId: string;
 }
 
-interface OllamaRerankItem {
-  index: number;
-  relevance_score: number;
-}
-
 // ── Embedding ──────────────────────────────────────────────────────────────
 
 export async function embedText(text: string): Promise<number[]> {
-  const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
-  const embedModel =
-    process.env.OLLAMA_EMBED_MODEL || DEFAULT_OLLAMA_EMBED_MODEL;
-
-  const res = await fetch(`${baseUrl}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: embedModel, prompt: text }),
+  const response = await cohere.embed({
+    texts: [text],
+    model: "embed-english-v3.0",
+    inputType: "search_query",
+    embeddingTypes: ["float"],
   });
 
-  if (!res.ok) throw new Error(`Ollama embed failed: ${res.statusText}`);
-  const data = await res.json();
-  return data.embedding as number[];
+  const embeddings = response.embeddings;
+  const floatEmbeddings = Array.isArray(embeddings)
+    ? embeddings
+    : embeddings.float;
+  const embedding = floatEmbeddings?.[0];
+  if (!embedding) throw new Error("Cohere embed returned no embedding");
+  return embedding;
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────
@@ -296,7 +291,7 @@ export async function retrieveChunks(
 
 /**
  * Re-ranks a result set. Currently uses the existing similarity score as
- * a proxy. Replace with a cross-encoder (e.g. FlashRank) for production.
+ * a proxy. Replace with a cross-encoder for production.
  */
 export async function rerankResults(
   query: string,
@@ -305,45 +300,27 @@ export async function rerankResults(
 ): Promise<RerankResult[]> {
   if (results.length === 0) return [];
 
-  const baseUrl = process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
-  const rerankModel =
-    process.env.OLLAMA_RERANK_MODEL || DEFAULT_OLLAMA_RERANK_MODEL;
-
   try {
-    const res = await fetch(`${baseUrl}/api/rerank`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: rerankModel,
-        query,
-        top_n: topN,
-        documents: results.map((r) => r.content),
-      }),
+    const response = await cohere.rerank({
+      model: "rerank-english-v3.0",
+      query,
+      documents: results.map((r) => r.content),
+      topN,
     });
 
-    if (!res.ok) {
-      throw new Error(`Ollama rerank failed: ${res.statusText}`);
-    }
-
-    const data = (await res.json()) as { results?: OllamaRerankItem[] };
-    const rerankItems = data.results ?? [];
-
-    const mapped = rerankItems
+    const mapped = response.results
       .map((item) => {
         const original = results[item.index];
         if (!original) return null;
-        const score = item.relevance_score;
         return {
           ...original,
-          score,
-          similarity: score,
+          score: item.relevanceScore,
+          similarity: item.relevanceScore,
         } satisfies RerankResult;
       })
       .filter((item): item is RerankResult => item !== null);
 
-    if (mapped.length > 0) {
-      return mapped;
-    }
+    if (mapped.length > 0) return mapped;
   } catch (error) {
     console.warn("Re-ranking unavailable, using blended score order:", error);
   }
