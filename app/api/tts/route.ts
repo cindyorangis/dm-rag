@@ -9,9 +9,9 @@ export async function GET(req: NextRequest) {
   if (!text) return new Response("No text provided", { status: 400 });
 
   // Pass the voice parameter to the Python server
-const response = await fetch(
-  `${ttsBase}/generate?text=${encodeURIComponent(text)}&voice=${voice}`,
-);
+  const response = await fetch(
+    `${ttsBase}/generate?text=${encodeURIComponent(text)}&voice=${voice}`,
+  );
 
   return new Response(response.body, {
     headers: { "Content-Type": "audio/wav" },

@@ -10,13 +10,13 @@ WORKDIR /app
 
 # 1. Install pip requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt huggingface_hub
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 2. Download model files
 # Using environment variables makes the RUN command cleaner
-RUN python3 -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='hexgrad/Kokoro-82M', filename='kokoro-v1.0.onnx', local_dir='.'); \
-    hf_hub_download(repo_id='hexgrad/Kokoro-82M', filename='voices-v1.0.bin', local_dir='.')"
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    curl -L "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" -o /app/kokoro-v1.0.onnx && \
+    curl -L "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" -o /app/voices-v1.0.bin
 
 # 3. Copy application code
 COPY main.py .
