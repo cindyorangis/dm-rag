@@ -314,3 +314,453 @@ Implementation details are documented in [docs/GAME_MECHANICS.md](docs/GAME_MECH
 
 May your rolls be high and your traps be few.
 🐉
+
+---
+
+## Contributing
+
+### Adding a New Adventure
+
+1. Create a new folder under `scripts/books/adventures/`
+2. Add adventure module PDFs
+3. Run `python scripts/ingest.py`
+4. Update `lib/adventures/config.ts` with adventure metadata
+
+### Testing
+
+Run tests before submitting:
+
+```bash
+npm test
+npm run eval:rag
+```
+
+### Code Style
+
+- TypeScript strict mode enabled (`tsconfig.json`)
+- Use existing utilities in `lib/`
+- Write unit tests for new features
+- Follow existing patterns in `lib/combat/`
+
+````
+
+---
+
+## 2. API Documentation
+
+You have many API routes - add OpenAPI/Swagger or inline docs:
+
+```markdown
+## API Documentation
+
+See `docs/API_DOCS.md` for detailed OpenAPI spec.
+
+Quick reference:
+
+| Endpoint                    | Method   | Description                               |
+| --------------------------- | -------- | ----------------------------------------- |
+| `/api/chat`                 | POST     | RAG pipeline + combat state updates       |
+| `/api/sessions`             | POST     | Create new session with opening narration |
+| `/api/combat/[id]`         | PATCH    | Submit player initiative roll             |
+| `/api/journal`              | POST     | Generate journal entry at session end     |
+````
+
+---
+
+## 3. Data Model
+
+You use Supabase - add a schema section:
+
+```markdown
+## Database Schema
+
+Key tables:
+
+- `sessions` — Active play sessions with character context
+- `journal_entries` — End-of-session summaries
+- `combat_states` — Combat tracker state
+- `chat_messages` — Session conversation history
+- `document_chunks` — Ingested knowledge chunks
+
+See `docs/SETUP_AND_SCHEMA.md` for full schema.
+```
+
+---
+
+## 4. Environment Variables Reference
+
+Expand on your current section:
+
+```markdown
+## Environment Variables (Expanded)
+
+### LLM Configuration
+
+| Variable             | Default | Description                              |
+| -------------------- | ------- | ---------------------------------------- |
+| `LLM_PROVIDER`       | -       | `ollama` \| `groq` (overrides local/dev) |
+| `OLLAMA_CHAT_MODEL`  | -       | Must match `ollama list` exactly         |
+| `OLLAMA_EMBED_MODEL` | -       | Must match ingestion model               |
+| `GROQ_CHAT_MODEL`    | -       | Model name for Groq API                  |
+
+### Supabase
+
+| Variable                               | Description               |
+| -------------------------------------- | ------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Client-side public key    |
+| `SUPABASE_SECRET_KEY`                  | Server-side secret key    |
+```
+
+---
+
+## 5. Troubleshooting Ollama
+
+````markdown
+## Ollama Setup
+
+### Verify Installation
+
+```bash
+ollama list
+# Ensure models match exactly:
+# - ollama_chat_model = llama3.1:8b (not llama3)
+# - ollama_embed_model = mxbai-embed-large
+```
+````
+
+### Troubleshooting
+
+- Ollama not responding? Run in another terminal: `ollama serve`
+- Model not found? Run: `ollama pull <model_name>`
+- Streaming issues? Check disk space and RAM
+
+````
+
+---
+
+## 6. Deployment Guide
+
+```markdown
+## Deployment to Vercel
+
+### Setup
+
+1. Connect your GitHub repo to Vercel
+2. Add environment variables (`.env` → Vercel secrets)
+3. Deploy: `vercel deploy --prod`
+
+### Supabase
+
+- Production project recommended
+- Export `SUPABASE_SECRET_KEY` to Vercel
+- Enable RLS (Row Level Security) for production
+````
+
+---
+
+## 7. Document Ingestion Details
+
+Expand on your ingestion section:
+
+```markdown
+## Document Ingestion Pipeline
+
+### Supported Formats
+
+- PDF (single/multiple pages per document)
+- Markdown files (for quick testing)
+
+### Chunking Strategy
+
+- Default: ~500 characters with 100-character overlap
+- D&D-aware splitting via `DndTextSplitter`
+- Preserves tables and structured content
+- Tags chunks with `category` and `adventure_slug`
+
+### Adding Custom Content
+
+1. Place PDF in `scripts/books/<folder>/`
+2. Run `python scripts/ingest.py`
+3. Chunks appear in Supabase within seconds
+```
+
+---
+
+## 8. Character System
+
+```markdown
+## Character System
+
+### Premade Characters
+
+- Available via `/api/characters`
+- Includes standard D&D 5e races/classes
+- Can customize stats manually
+
+### Custom Characters
+
+- Create from scratch via session creation
+- Character context injected via `characterContext` field
+- Supports custom homebrew content
+```
+
+---
+
+## 9. Journal System
+
+```markdown
+## Journal System
+
+### What Gets Saved
+
+- Session summary
+- Key decisions made
+- Combat outcomes
+- Notable encounters
+
+### Journal Generation
+
+Triggered automatically when:
+
+- Session marked as complete
+- User requests pause
+- Session duration threshold reached
+
+Customize generation prompt in `app/api/journal/prompt.ts`
+```
+
+---
+
+## 10. Combat System Details
+
+```markdown
+## Combat System
+
+### Components
+
+- `lib/combat/dice.ts` — Dice rolling utilities
+- `lib/combat/detector.ts` — Combat detection
+- `lib/combat/engine.ts` — State machine
+- `lib/combat/encounters.ts` — Encounter definitions
+
+### Features
+
+- Initiative tracking
+- HP management
+- Damage calculation
+- Death resolution (narrative, not hard stop)
+- Turn enforcement (monsters act before player)
+```
+
+---
+
+## 11. RAG Pipeline Details
+
+```markdown
+## RAG Pipeline
+
+### Components
+
+- `lib/rag.ts` — Embeddings and retrieval
+- `lib/search/` — Search service
+- `lib/parse-dm-response.ts` — Response parsing
+
+### How It Works
+
+1. User asks question/enters action
+2. Embed query via Ollama `mxbai-embed-large`
+3. Retrieve relevant chunks from Supabase
+4. Inject chunks into LLM prompt
+5. Stream response via Ollama/Groq
+6. Parse response for structured content
+```
+
+---
+
+## 12. RAG Evaluation
+
+````markdown
+## RAG Evaluation
+
+Run built-in evals to test retrieval quality:
+
+```bash
+npm run eval:rag
+```
+````
+
+Test cases include:
+
+- Rules queries (spell slots, ability checks)
+- Lore queries (monster lore, location details)
+- Cross-adventure isolation
+- Confidence scoring
+
+See `docs/RAG_EVALS.md` for details.
+
+````
+
+---
+
+## 13. Error Handling
+
+```markdown
+## Error Handling
+
+### Player-Facing Messages
+
+- "DM is recovering" for failed LLM/API calls
+- Retry turn functionality
+- Preserved player actions for recovery
+
+### Debug Mode
+
+Enable verbose logging:
+
+```bash
+NODE_ENV=development npm run dev
+````
+
+See `lib/observability.ts` for logging utilities.
+
+````
+
+---
+
+## 14. Performance Notes
+
+```markdown
+## Performance
+
+### Document Size
+
+Recommended:
+- Core rulebooks: ~100 pages each
+- Adventure modules: ~50-100 pages
+- Total chunks: <50,000 for optimal performance
+
+### Streaming
+
+- Expected response time: 2-8 seconds
+- Depends on Ollama model load
+- Groq provides faster responses when enabled
+
+### Memory
+
+Ollama models require:
+- `llama3.1:8b` — ~5GB RAM
+- `mxbai-embed-large` — ~3GB RAM
+````
+
+---
+
+## 15. Security Notes
+
+```markdown
+## Security
+
+### Production Checklist
+
+- Enable Supabase RLS (Row Level Security)
+- Rotate keys periodically
+- Use separate Supabase project for production
+- Rate limit API routes
+- Enable HTTPS (Vercel handles this)
+
+### Secrets Management
+
+- Never commit `.env` to Git
+- Use `.env.local` for local development
+- Add `.env.example` to repo with placeholders
+```
+
+---
+
+## 16. Licensing
+
+Add a licensing section:
+
+```markdown
+## License
+
+MIT License — See LICENSE file for details.
+
+### Permitted Uses
+
+- Personal play
+- Non-commercial DMing
+- Educational purposes
+- Open-source projects
+
+### Not Permitted
+
+- Commercial distribution without permission
+- Redistribution of source rulebooks
+- Use with prohibited LLMs
+```
+
+---
+
+## 17. Showcase / Features
+
+Expand your feature list:
+
+```markdown
+## Features
+
+- ✨ **Immersive Storytelling** — AI DM with rich narrative
+- 🎲 **Full Combat Tracker** — Initiative, attacks, damage
+- 📚 **Scoped RAG** — Adventure-aware knowledge retrieval
+- 📖 **Auto Journal** — Campaign journal built automatically
+- 🧙 **Character Sheets** — Premade + custom character support
+- 💀 **Death Resolution** — Narrative continues after player death
+- 🔄 **Session Resume** — Pause and continue anytime
+- 📱 **Mobile-Ready** — Touch-friendly interface
+```
+
+---
+
+## 18. Roadmap
+
+```markdown
+## Roadmap
+
+### Phase 1: Foundation (✅ Complete)
+
+- Schema design
+- Document ingestion
+- Project setup
+
+### Phase 2: Core Features (✅ Complete)
+
+- RAG pipeline
+- Combat tracking
+- Journal system
+
+### Phase 3: Polish (🔲 Planned)
+
+- PDF export
+- Advanced UI theming
+- Multi-platform support
+- Custom spell/monster editor
+```
+
+---
+
+## 19. Credits
+
+```markdown
+## Credits
+
+- **Base Models**: Ollama (Llama 3), Groq
+- **Vector Embeddings**: mxbai-embed-large
+- **Database**: Supabase (PostgreSQL + pgvector)
+- **UI**: Tailwind CSS, Next.js
+
+**Special Thanks**:
+
+- D&D Open Game License content
+- D&D Beyond (for inspiration)
+- Open-source community
+```
