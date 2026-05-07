@@ -1,7 +1,16 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { CohereClient } from "cohere-ai";
 
-const cohere = new CohereClient({ token: process.env.COHERE_API_KEY });
+let _cohereClient: CohereClient | null = null;
+
+function getCohereClient(): CohereClient {
+  if (!_cohereClient) {
+    const token = process.env.COHERE_API_KEY;
+    if (!token) throw new Error("COHERE_API_KEY is not set");
+    _cohereClient = new CohereClient({ token });
+  }
+  return _cohereClient;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +76,7 @@ interface RerankResult {
 // ── Embedding ──────────────────────────────────────────────────────────────
 
 export async function embedText(text: string): Promise<number[]> {
-  const response = await cohere.embed({
+  const response = await getCohereClient().embed({
     texts: [text],
     model: "embed-english-v3.0",
     inputType: "search_query",
@@ -301,7 +310,7 @@ export async function rerankResults(
   if (results.length === 0) return [];
 
   try {
-    const response = await cohere.rerank({
+    const response = await getCohereClient().rerank({
       model: "rerank-english-v3.0",
       query,
       documents: results.map((r) => r.content),
