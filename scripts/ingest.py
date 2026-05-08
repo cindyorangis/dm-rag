@@ -1,8 +1,8 @@
 import os
+import time
 from pathlib import Path
-from llama_cloud import LlamaCloud
 
-# Load .env.local manually
+# Load .env.local manually (before any other imports that read env vars)
 env_path = Path(__file__).parent.parent / ".env.local"
 if env_path.exists():
     with open(env_path) as f:
@@ -12,7 +12,8 @@ if env_path.exists():
                 key, _, value = line.partition("=")
                 os.environ.setdefault(key.strip(), value.strip())
 
-import ollama
+import cohere
+from llama_cloud import LlamaCloud
 from supabase import create_client
 
 from dnd_splitters import (
@@ -29,26 +30,61 @@ from dnd_splitters import (
 SUPABASE_URL = os.environ["NEXT_PUBLIC_SUPABASE_URL"]
 SUPABASE_KEY = os.environ["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]
 LLAMA_CLOUD_API_KEY = os.environ["LLAMA_CLOUD_API_KEY"]
+COHERE_API_KEY = os.environ["COHERE_API_KEY"]
 BOOKS_DIR = Path(__file__).parent / "books"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
-EMBED_MODEL = "mxbai-embed-large"
+
+# Cohere embed model — must match rag.ts embedText()
+EMBED_MODEL = "embed-english-v3.0"
+EMBED_DIMENSION = 1024  # embed-english-v3.0 output dimension
+
+# Cohere rate limit: 100 calls/min on trial, 10k/min on production
+# Batch up to 96 texts per call (Cohere max is 96)
+EMBED_BATCH_SIZE = 96
+EMBED_RATE_LIMIT_DELAY = 0.1  # seconds between batches (conservative)
 
 # ── Clients ────────────────────────────────────────────────────────────────
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+co = cohere.Client(api_key=COHERE_API_KEY)
 
 # ── Splitters ──────────────────────────────────────────────────────────────
 table_splitter = SplitterFactory.create("table", CHUNK_SIZE, CHUNK_OVERLAP)
 prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
 
 
+# ── Embedding ──────────────────────────────────────────────────────────────
+def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
+    """Embed a batch of texts using Cohere embed-english-v3.0.
+
+    Uses input_type='search_document' for ingestion (vs 'search_query' at retrieval time).
+    This asymmetry is intentional and improves retrieval quality.
+    """
+    response = co.embed(
+        texts=texts,
+        model=EMBED_MODEL,
+        input_type="search_document",
+        embedding_types=["float"],
+    )
+    embeddings = response.embeddings
+    # SDK returns EmbedByTypeResponseEmbeddings object; access .float attribute
+    if hasattr(embeddings, "float"):
+        return embeddings.float
+    # Fallback: raw list
+    return embeddings  # type: ignore
+
+
+def get_embedding(text: str) -> list[float]:
+    """Embed a single text. Use get_embeddings_batch for bulk ingestion."""
+    return get_embeddings_batch([text])[0]
+
+
 # ── Extraction Logic ───────────────────────────────────────────────────────
 def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
-    print(f"    ☁️ Sending {pdf_path.name} to Llama Cloud...")
+    print(f"    ☁️  Sending {pdf_path.name} to Llama Cloud...")
 
     client = LlamaCloud(api_key=LLAMA_CLOUD_API_KEY)
 
-    # Split large PDFs into chunks before uploading
     pages_per_batch = 50
     all_pages: list[tuple[int, str]] = []
 
@@ -62,15 +98,11 @@ def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
         total_pages = None
 
     if total_pages and total_pages > pages_per_batch:
-        # Process in batches
         import pypdf
         import tempfile
 
         reader = pypdf.PdfReader(pdf_path)
-        batches = range(0, total_pages, pages_per_batch)
-        print(
-            f"    → Splitting into {len(list(batches))} batches of {pages_per_batch} pages"
-        )
+        print(f"    → Splitting into batches of {pages_per_batch} pages")
 
         for batch_start in range(0, total_pages, pages_per_batch):
             batch_end = min(batch_start + pages_per_batch, total_pages)
@@ -98,7 +130,6 @@ def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
 
 
 def _parse_pdf_bytes(client, pdf_path: Path, page_offset: int) -> list[tuple[int, str]]:
-    """Upload a single PDF (or batch chunk) to LlamaCloud and return (page_num, text) pairs."""
     with open(pdf_path, "rb") as f:
         file = client.files.create(file=f, purpose="parse")
 
@@ -112,7 +143,6 @@ def _parse_pdf_bytes(client, pdf_path: Path, page_offset: int) -> list[tuple[int
     pages = []
     if result.markdown and result.markdown.pages:
         for page in result.markdown.pages:
-            # Use page_number from the object if available, else fall back to index
             page_num = getattr(page, "page_number", None)
             if page_num is None:
                 page_num = len(pages) + 1 + page_offset
@@ -126,22 +156,11 @@ def _parse_pdf_bytes(client, pdf_path: Path, page_offset: int) -> list[tuple[int
     return pages
 
 
-def separate_tables_from_prose(text: str) -> tuple[str, str]:
-    """Returns (prose_text, table_text)"""
-    import re
-
-    table_pattern = re.compile(r"(<table.*?</table>)", re.DOTALL | re.IGNORECASE)
-    tables = table_pattern.findall(text)
-    prose = table_pattern.sub("", text)
-    return prose.strip(), "\n".join(tables)
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ── Chunking ───────────────────────────────────────────────────────────────
 def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
     if is_junk_page(text):
         return []
 
-    # Strip image markdown lines — they're useless for RAG
     import re
 
     text = re.sub(r"!\[.*?\]\(.*?\)\n?", "", text)
@@ -165,11 +184,7 @@ def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
     return docs
 
 
-def get_embedding(text: str) -> list[float]:
-    result = ollama.embed(model=EMBED_MODEL, input=text)
-    return result.embeddings[0]
-
-
+# ── Helpers ────────────────────────────────────────────────────────────────
 def document_already_ingested(title: str) -> bool:
     result = supabase.table("documents").select("id").eq("title", title).execute()
     return len(result.data) > 0
@@ -184,17 +199,15 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
 
     print(f"  Processing: {title} ({category} / {adventure_slug or 'N/A'})")
 
-    # 1. Extract all pages via LlamaParse
+    # 1. Extract pages via LlamaParse
     pages = extract_text_from_pdf(pdf_path)
 
-    # 2. Build a blacklist of repeating headers/footers
+    # 2. Strip repeating boilerplate (headers/footers)
     boilerplate = build_boilerplate_blacklist(pages, min_occurrences=4)
     if boilerplate:
         print(f"    → Stripping {len(boilerplate)} boilerplate fragments")
-        for sample in list(boilerplate)[:3]:
-            print(f"      e.g. {repr(sample[:60])}")
 
-    # 3. Create document record
+    # 3. Insert document record
     doc_result = (
         supabase.table("documents")
         .insert(
@@ -209,44 +222,70 @@ def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
     )
     doc_id = doc_result.data[0]["id"]
 
-    # 4. Chunk with boilerplate removed
+    # 4. Chunk all pages
     all_docs: list[Document] = []
     for page_num, page_text in pages:
         page_text = remove_boilerplate(page_text, boilerplate)
         page_text = clean_pdf_text(page_text)
-
         if is_junk_page(page_text) or len(page_text.strip()) < 50:
             continue
-
         all_docs.extend(chunk_page(page_num, page_text, source=title))
 
     print(f"    → {len(pages)} pages → {len(all_docs)} chunks")
 
-    # 5. Embed and insert
-    inserted = 0
-    for i, doc in enumerate(all_docs):
-        try:
-            embedding = get_embedding(doc.page_content)
-            supabase.table("chunks").insert(
-                {
-                    "document_id": doc_id,
-                    "content": doc.page_content,
-                    "embedding": embedding,
-                    "page": doc.metadata.get("page"),
-                }
-            ).execute()
-            inserted += 1
-        except Exception as e:
-            print(f"\n  ❌ Error on chunk {i + 1}: {e}")
+    if not all_docs:
+        print("  ⚠️  No chunks produced, skipping insert.")
+        return
 
-    print(f"  ✅ Done — {inserted}/{len(all_docs)} chunks inserted.")
+    # 5. Embed in batches and insert
+    inserted = 0
+    errors = 0
+
+    for batch_start in range(0, len(all_docs), EMBED_BATCH_SIZE):
+        batch = all_docs[batch_start : batch_start + EMBED_BATCH_SIZE]
+        texts = [doc.page_content for doc in batch]
+
+        try:
+            embeddings = get_embeddings_batch(texts)
+        except Exception as e:
+            print(f"\n  ❌ Embedding error on batch starting at {batch_start}: {e}")
+            errors += len(batch)
+            continue
+
+        rows = [
+            {
+                "document_id": doc_id,
+                "content": doc.page_content,
+                "embedding": embedding,
+                "page": doc.metadata.get("page"),
+            }
+            for doc, embedding in zip(batch, embeddings)
+        ]
+
+        try:
+            supabase.table("chunks").insert(rows).execute()
+            inserted += len(rows)
+        except Exception as e:
+            print(f"\n  ❌ Insert error on batch starting at {batch_start}: {e}")
+            errors += len(batch)
+
+        # Respect Cohere rate limits
+        if batch_start + EMBED_BATCH_SIZE < len(all_docs):
+            time.sleep(EMBED_RATE_LIMIT_DELAY)
+
+        progress = min(batch_start + EMBED_BATCH_SIZE, len(all_docs))
+        print(f"    → Embedded {progress}/{len(all_docs)} chunks...", end="\r")
+
+    print(
+        f"\n  ✅ Done — {inserted}/{len(all_docs)} chunks inserted. ({errors} errors)"
+    )
 
 
 # ── Main Entry Point ───────────────────────────────────────────────────────
 def ingest_books():
     core_dir = BOOKS_DIR / "core"
     if core_dir.exists():
-        print(f"Processing Core Rulebooks in {core_dir}")
+        print(f"\nProcessing Core Rulebooks in {core_dir}")
         for pdf_path in sorted(core_dir.glob("*.pdf")):
             process_file(pdf_path, category="core", adventure_slug=None)
     else:
@@ -254,11 +293,11 @@ def ingest_books():
 
     adventures_dir = BOOKS_DIR / "adventures"
     if adventures_dir.exists():
-        print(f"Processing Adventures in {adventures_dir}")
+        print(f"\nProcessing Adventures in {adventures_dir}")
         for adv_folder in sorted(adventures_dir.iterdir()):
             if adv_folder.is_dir():
                 slug = adv_folder.name
-                print(f"--- Adventure: {slug} ---")
+                print(f"\n--- Adventure: {slug} ---")
                 for pdf_path in sorted(adv_folder.glob("*.pdf")):
                     process_file(pdf_path, category="adventure", adventure_slug=slug)
     else:

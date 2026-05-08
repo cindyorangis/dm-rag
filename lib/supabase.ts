@@ -32,3 +32,5 @@ export const supabase = new Proxy({} as SupabaseClient, {
 export const supabaseAdmin = new Proxy({} as SupabaseClient, {
   get: (_, prop) => getSupabaseAdmin()[prop as keyof SupabaseClient],
 });
+
+export type supabaseAdminType = typeof supabaseAdmin;
