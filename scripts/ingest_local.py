@@ -1,5 +1,6 @@
 import os
 import re
+import pymupdf  # fitz
 import pymupdf4llm
 from pathlib import Path
 
@@ -48,20 +49,50 @@ prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
 
 
 def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
-    """
-    Parse PDF to Markdown using pymupdf4llm.
-    No LLM cleanup pass — dnd_splitters handles structure preservation.
-    """
     print(f"    Parsing {pdf_path.name}...")
     md_text = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True)
 
     pages = []
+    low_text_pages = 0
+
     for chunk in md_text:
         page_num = chunk.get("metadata", {}).get("page", 0) + 1
         raw_text = chunk.get("text", "").strip()
-        if raw_text:
+        # Strip empty markdown headers to get real content length
+        real_text = re.sub(r"^#+\s*$", "", raw_text, flags=re.MULTILINE).strip()
+        if real_text:
             pages.append((page_num, raw_text))
+        else:
+            low_text_pages += 1
 
+    # If more than 40% of pages have no extractable text, fall back to OCR
+    total = len(md_text)
+    if total > 0 and low_text_pages / total > 0.4:
+        print(
+            f"    ⚠️  {low_text_pages}/{total} pages empty — PDF appears scanned, switching to OCR..."
+        )
+        return extract_text_ocr(pdf_path)
+
+    return pages
+
+
+def extract_text_ocr(pdf_path: Path) -> list[tuple[int, str]]:
+    """OCR fallback using PyMuPDF's built-in Tesseract integration."""
+    doc = pymupdf.open(str(pdf_path))
+    pages = []
+
+    for page_num, page in enumerate(doc, start=1):
+        try:
+            # get_textpage_ocr requires Tesseract installed on the system
+            tp = page.get_textpage_ocr(flags=pymupdf.TEXT_PRESERVE_WHITESPACE, dpi=300)
+            text = page.get_text(textpage=tp).strip()
+            if text and len(text) > 50:
+                pages.append((page_num, text))
+        except Exception as e:
+            print(f"    ⚠️  OCR failed on page {page_num}: {e}")
+
+    doc.close()
+    print(f"    → OCR complete: {len(pages)} pages with text")
     return pages
 
 
