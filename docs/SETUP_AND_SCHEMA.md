@@ -1,20 +1,14 @@
-## Database Schema
+# Setup & Schema
+
+---
+
+## Database Schema (Supabase)
+
+Supabase handles all relational data — sessions, messages, characters, combat state, and observability metrics. Vector storage has moved to Qdrant Cloud.
 
 ### documents
 
-Stores metadata for each source book. The `category` and `adventure_slug` columns are used by the scoped RAG function to filter chunks per session.
-
-```
-id, title, type, category ('core' | 'adventure'), adventure_slug
-```
-
-### chunks
-
-Each chunk is a ~500 character passage from a source document, stored with its vector embedding. Indexed for fast similarity search with pgvector.
-
-```
-id, document_id, content, embedding (vector), page
-```
+> **Deprecated** — No longer used for vector storage. Qdrant payload fields (`category`, `adventure_slug`, `source`) replace this table's role in scoped RAG filtering. This table can be retained for reference or dropped safely.
 
 ### sessions
 
@@ -80,48 +74,7 @@ combat_rule_error_count, combat_rule_errors (jsonb), created_at
 
 ## Supabase Setup
 
-Enable the pgvector extension:
-
-```sql
-create extension if not exists vector;
-```
-
-Add `category` and `adventure_slug` columns to the `documents` table:
-
-```sql
-alter table documents add column if not exists category text default 'core';
-alter table documents add column if not exists adventure_slug text;
-```
-
-Create the scoped similarity search function (replaces the original `match_chunks`):
-
-```sql
-create or replace function match_chunks_scoped(
-  query_embedding vector,
-  adventure_slug text,
-  match_count int default 6
-)
-returns table (
-  id uuid,
-  content text,
-  similarity float
-)
-language sql stable
-as $$
-  select
-    c.id,
-    c.content,
-    1 - (c.embedding <=> query_embedding) as similarity
-  from chunks c
-  join documents d on d.id = c.document_id
-  where d.category = 'core'
-     or d.adventure_slug = adventure_slug
-  order by c.embedding <=> query_embedding
-  limit match_count;
-$$;
-```
-
-Create the combat state table:
+### combat_state
 
 ```sql
 create table combat_state (
@@ -137,7 +90,14 @@ create table combat_state (
 );
 ```
 
-Create the turn metrics table:
+> **Note:** If you created `combat_state` before the initiative roll feature was added, run:
+>
+> ```sql
+> alter table combat_state
+>   add column if not exists awaiting_player_initiative boolean default false;
+> ```
+
+### turn_metrics
 
 ```sql
 create table if not exists turn_metrics (
@@ -168,7 +128,7 @@ create index if not exists turn_metrics_session_id_idx
   on turn_metrics(session_id, created_at desc);
 ```
 
-Create the characters table:
+### characters
 
 ```sql
 create table characters (
@@ -196,7 +156,7 @@ create table characters (
 );
 ```
 
-Add columns to the sessions table:
+### sessions columns
 
 ```sql
 alter table sessions add column if not exists character_context text;
@@ -207,9 +167,101 @@ alter table sessions add column if not exists memory_structured jsonb default '{
 alter table sessions add column if not exists memory_summary_message_count int not null default 0;
 ```
 
-> **Note:** If you created the `combat_state` table before the initiative roll feature was added, run this migration:
->
-> ```sql
-> alter table combat_state
->   add column if not exists awaiting_player_initiative boolean default false;
-> ```
+---
+
+## Qdrant Cloud Setup
+
+Vector storage — chunk embeddings and scoped RAG retrieval — runs entirely in Qdrant Cloud. Supabase pgvector is no longer used.
+
+### 1. Create a cluster
+
+Sign up at [cloud.qdrant.io](https://cloud.qdrant.io) and create a free cluster. Copy the cluster URL and API key into your `.env.local`:
+
+```bash
+QDRANT_URL=https://your-cluster.qdrant.io
+QDRANT_API_KEY=your_qdrant_api_key
+QDRANT_COLLECTION=dnd_chunks
+```
+
+### 2. Run ingestion
+
+The ingestion script creates the collection and all required payload indexes automatically on first run:
+
+```bash
+pip install qdrant-client cohere pymupdf python-dotenv
+python scripts/ingest.py
+```
+
+This is the only setup step required. No manual collection or index creation is needed.
+
+### 3. What gets created automatically
+
+`ingest.py → ensure_collection()` creates:
+
+**Collection** — `dnd_chunks` with cosine similarity, 1024-dimensional vectors (Cohere `embed-english-v3.0`):
+
+```
+VectorParams(size=1024, distance=Distance.COSINE)
+```
+
+**Payload indexes** — required for filtered scroll (deduplication) and scoped search:
+
+| Field            | Type    | Used for                                      |
+| ---------------- | ------- | --------------------------------------------- |
+| `source`         | keyword | Deduplication check during ingestion          |
+| `chunk_index`    | integer | Deduplication check during ingestion          |
+| `category`       | keyword | Scoping search to `core` or `adventure`       |
+| `adventure_slug` | keyword | Scoping search to the active adventure module |
+
+**Full-text index on `content`** — required for keyword search leg of hybrid retrieval. Create this once manually via the Qdrant Cloud console or with a one-time request:
+
+```bash
+curl -X PUT \
+  "$QDRANT_URL/collections/dnd_chunks/index" \
+  -H "api-key: $QDRANT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"field_name": "content", "field_schema": "text"}'
+```
+
+Without this index, `calculateKeywordScores()` will throw and gracefully fall back to vector-only retrieval.
+
+### 4. Chunk payload schema
+
+Each point stored in Qdrant has the following payload:
+
+```json
+{
+  "content": "The goblin snarls and draws its blade...",
+  "source": "DungeonMastersGuide2024.pdf",
+  "category": "core",
+  "adventure_slug": "",
+  "chunk_index": 42,
+  "chunk_type": "text",
+  "page": 17
+}
+```
+
+For adventure chunks, `category` is `"adventure"` and `adventure_slug` is the folder name (e.g. `"lost-mine-of-phandelver"`).
+
+### 5. Scoped retrieval filter
+
+`rag.ts → scopedFilter(adventureSlug)` builds a Qdrant `should` filter that matches core rulebooks **or** the active adventure:
+
+```json
+{
+  "should": [
+    { "key": "category", "match": { "value": "core" } },
+    {
+      "must": [
+        { "key": "category", "match": { "value": "adventure" } },
+        {
+          "key": "adventure_slug",
+          "match": { "value": "lost-mine-of-phandelver" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+This mirrors the behaviour of the original `match_chunks_scoped` Supabase RPC exactly.

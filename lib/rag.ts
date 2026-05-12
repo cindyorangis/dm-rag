@@ -189,21 +189,23 @@ interface RerankResult {
 
 // ── Embedding ──────────────────────────────────────────────────────────────
 
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+const OLLAMA_EMBED_MODEL =
+  process.env.OLLAMA_EMBED_MODEL ?? "mxbai-embed-large";
+
 export async function embedText(text: string): Promise<number[]> {
-  const response = await getCohereClient().embed({
-    texts: [text],
-    model: "embed-english-v3.0",
-    inputType: "search_query",
-    embeddingTypes: ["float"],
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: OLLAMA_EMBED_MODEL, prompt: text }),
   });
 
-  const embeddings = response.embeddings;
-  const floatEmbeddings = Array.isArray(embeddings)
-    ? embeddings
-    : embeddings.float;
-  const embedding = floatEmbeddings?.[0];
-  if (!embedding) throw new Error("Cohere embed returned no embedding");
-  return embedding;
+  if (!res.ok) {
+    throw new Error(`Ollama embed error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return data.embedding as number[];
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────

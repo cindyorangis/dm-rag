@@ -30,7 +30,8 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env.local")
 
 import re
 import fitz  # PyMuPDF
-import cohere
+import urllib.request
+import json
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -58,7 +59,6 @@ from dnd_splitters import (
 
 QDRANT_URL = os.environ["QDRANT_URL"]
 QDRANT_API_KEY = os.environ["QDRANT_API_KEY"]
-COHERE_API_KEY = os.environ["COHERE_API_KEY"]
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "dnd_chunks")
 BOOKS_DIR = Path(__file__).parent.parent / "scripts" / "books"
 
@@ -72,7 +72,8 @@ VECTOR_SIZE = 1024
 # ── Clients ────────────────────────────────────────────────────────────────
 
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-co = cohere.Client(COHERE_API_KEY)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
 
 
 def strip_html(text: str) -> str:
@@ -116,13 +117,13 @@ def ensure_collection() -> None:
 # ── Deduplication ──────────────────────────────────────────────────────────
 
 
-def chunk_already_ingested(source: str, chunk_index: int) -> bool:
+def file_already_ingested(source: str) -> bool:
+    """One scroll call per file — checks if ANY chunk from this source exists."""
     results, _ = qdrant.scroll(
         collection_name=COLLECTION_NAME,
         scroll_filter=Filter(
             must=[
                 FieldCondition(key="source", match=MatchValue(value=source)),
-                FieldCondition(key="chunk_index", match=MatchValue(value=chunk_index)),
             ]
         ),
         limit=1,
@@ -136,15 +137,19 @@ def chunk_already_ingested(source: str, chunk_index: int) -> bool:
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    response = co.embed(
-        texts=texts,
-        model="embed-english-v3.0",
-        input_type="search_document",
-        embedding_types=["float"],
-    )
-    embeddings = response.embeddings
-    floats = embeddings if isinstance(embeddings, list) else embeddings.float
-    return floats
+    """Embed a batch of texts via local Ollama (mxbai-embed-large)."""
+    vectors = []
+    for text in texts:
+        body = json.dumps({"model": EMBED_MODEL, "prompt": text}).encode()
+        req = urllib.request.Request(
+            f"{OLLAMA_BASE_URL}/api/embeddings",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+        vectors.append(data["embedding"])
+    return vectors
 
 
 # ── PDF extraction ─────────────────────────────────────────────────────────
@@ -235,12 +240,7 @@ def upsert_chunks(
         qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
         print(f"    ↑ upserted {len(points)} chunks")
 
-    skipped = 0
     for i, doc in enumerate(docs):
-        if chunk_already_ingested(source, i):
-            skipped += 1
-            continue
-
         pending_docs.append(doc)
         pending_idxs.append(i)
 
@@ -250,9 +250,6 @@ def upsert_chunks(
 
     flush(pending_docs, pending_idxs)
 
-    if skipped:
-        print(f"    ⏭  skipped {skipped} already-ingested chunks")
-
 
 # ── Per-file entry point ────────────────────────────────────────────────────
 
@@ -260,6 +257,10 @@ def upsert_chunks(
 def ingest_file(pdf_path: Path, category: str, adventure_slug: str) -> None:
     source = pdf_path.name
     print(f"\n📄 {source}  [{category}]")
+
+    if file_already_ingested(source):
+        print("    ⏭  already ingested, skipping.")
+        return
 
     pages = extract_pages(pdf_path)
     if not pages:

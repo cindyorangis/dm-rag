@@ -49,15 +49,16 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 
 ## Tech Stack
 
-| Layer      | Choice                            | Notes                                             |
-| ---------- | --------------------------------- | ------------------------------------------------- |
-| Frontend   | Next.js (App Router) + TypeScript | App Router, server and client components          |
-| Styling    | Tailwind CSS                      | Dark fantasy / parchment UI theme                 |
-| LLM        | Ollama (Llama 3)                  | Local inference, no API cost                      |
-| Embeddings | Ollama (mxbai-embed-large)        | Local embeddings, matches ingestion model         |
-| Vector DB  | Supabase pgvector                 | Cosine similarity via `<=>` operator              |
-| Database   | Supabase (PostgreSQL)             | Sessions, messages, journal entries, combat state |
-| Hosting    | Vercel                            | Free tier, zero-config Next.js deploys            |
+| Layer      | Choice                            | Notes                                                         |
+| ---------- | --------------------------------- | ------------------------------------------------------------- |
+| Frontend   | Next.js (App Router) + TypeScript | App Router, server and client components                      |
+| Styling    | Tailwind CSS                      | Dark fantasy / parchment UI theme                             |
+| LLM        | Ollama (Llama 3) / Groq           | Local inference or Groq API; configurable via `LLM_PROVIDER`  |
+| Embeddings | Cohere `embed-english-v3.0`       | 1024-dimensional embeddings; used for ingestion and retrieval |
+| Reranking  | Cohere `rerank-english-v3.0`      | Cross-encoder reranking after hybrid retrieval                |
+| Vector DB  | Qdrant Cloud                      | Cosine similarity; payload-indexed for scoped filtering       |
+| Database   | Supabase (PostgreSQL)             | Sessions, messages, journal entries, combat state             |
+| Hosting    | Vercel                            | Free tier, zero-config Next.js deploys                        |
 
 ---
 
@@ -76,7 +77,7 @@ scripts/books/
     tales-from-the-yawning-portal/
 ```
 
-Each PDF is parsed, chunked into ~1000 character sections with 100-character overlap, and converted into vector embeddings via Ollama. Chunks are stored in Supabase with `pgvector`, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
+Each PDF is parsed, chunked into ~1000 character sections with 100-character overlap, and embedded via Cohere `embed-english-v3.0`. Chunks are stored in Qdrant Cloud, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
 
 Run ingestion once per new book:
 
@@ -84,7 +85,7 @@ Run ingestion once per new book:
 python scripts/ingest.py
 ```
 
-The script skips documents already in the database, so it's safe to re-run after adding new PDFs.
+The script skips chunks already in Qdrant (by `source` + `chunk_index`), so it's safe to re-run after adding new PDFs.
 
 ---
 
@@ -147,7 +148,9 @@ app/
  |                                    # splits raw DM output into narrative, statusItems,
  |                                    # and hints; structured parser with freeform fallback
  ├── rag.ts                           # embedText() + retrieveChunks(query, adventureSlug) —
- |                                    # scoped to core rulebooks + active adventure chunks
+ |                                    # hybrid vector + keyword search via Qdrant Cloud;
+ |                                    # Cohere embeddings + reranking; scoped to core
+ |                                    # rulebooks + active adventure chunks
  └── supabase.ts                      # Supabase client (browser + admin)
  hooks/
  └── useChat.ts                       # Chat state, streaming, initiative flag
@@ -164,8 +167,9 @@ scripts/
  |                                    # TableSplitter with overlap-aware prose chunking;
  |                                    # shared DndSplitter interface for all three types
  └── ingest.py                        # Document ingestion pipeline — processes core/ and
-                                      # adventures/ subdirectories, tags each chunk with
-                                      # category and adventure_slug for scoped RAG retrieval
+                                      # adventures/ subdirectories; embeds via Cohere;
+                                      # upserts to Qdrant Cloud with payload indexes for
+                                      # scoped RAG filtering by category + adventure_slug
 ```
 
 ---
@@ -186,7 +190,7 @@ scripts/
 - `GET /api/sessions/[id]` — Fetch a single session including character context and adventure slug
 - `GET /api/sessions/[id]/messages` — Fetch all messages for a session
 - `GET /api/characters` — Fetch the premade character roster
-- `POST /api/chat` — RAG pipeline: embed → scoped retrieve → stream LLM response + update combat state
+- `POST /api/chat` — RAG pipeline: embed → scoped retrieve → rerank → stream LLM response + update combat state
 - `GET /api/combat/[id]` — Fetch current combat state for a session
 - `PATCH /api/combat/[id]` — Submit player initiative roll; re-sorts combatants and clears awaiting flag
 - `POST /api/journal` — End-of-session journal generation; accepts `pause: true` to set status to `paused` instead of `completed`
@@ -201,7 +205,9 @@ scripts/
 
 - Node.js 18+
 - Python 3.9+
-- Ollama installed and running locally
+- Ollama installed and running locally (for local LLM inference)
+- Cohere account (free tier sufficient for development)
+- Qdrant Cloud account (free tier: 1GB)
 - Supabase account (free)
 - Vercel account for deployment (free)
 
@@ -209,27 +215,45 @@ scripts/
 
 ```bash
 ollama pull llama3.1:8b
-ollama pull mxbai-embed-large
 ```
 
-> Run `ollama list` to verify your installed model names. The chat model name in your `.env.local` must exactly match what Ollama reports (e.g. `llama3.2` instead of `llama3`).
+> Run `ollama list` to verify your installed model names. The chat model name in your `.env.local` must exactly match what Ollama reports (e.g. `llama3.2` instead of `llama3`). Embeddings are now handled by Cohere — `mxbai-embed-large` is no longer required.
 
 ### Environment Variables
 
 ```bash
+# Supabase (sessions, messages, combat state, journal)
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
 SUPABASE_SECRET_KEY=your_supabase_secret_key
+
+# Qdrant Cloud (vector store)
+QDRANT_URL=https://your-cluster.qdrant.io
+QDRANT_API_KEY=your_qdrant_api_key
+QDRANT_COLLECTION=dnd_chunks
+
+# Cohere (embeddings + reranking)
+COHERE_API_KEY=your_cohere_api_key
+
+# LLM — local Ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_EMBED_MODEL=mxbai-embed-large
 OLLAMA_CHAT_MODEL=llama3.1:8b
+
+# LLM — Groq (faster; used in production by default)
 GROQ_API_KEY=your_groq_api_key
 GROQ_BASE_URL=https://api.groq.com/v1
 GROQ_CHAT_MODEL=llama-3.3-70b-versatile
-# Optional override. If omitted:
-# - production uses groq
-# - local development uses ollama
+
+# Optional: override LLM provider. If omitted:
+#   production → groq
+#   local dev  → ollama
 LLM_PROVIDER=
+
+# RAG tuning (optional — defaults shown)
+RAG_MAX_CHUNKS=4
+RAG_MIN_SIMILARITY=0.2
+RAG_CONFIDENCE_LOW_THRESHOLD=0.38
+RAG_CONFIDENCE_HIGH_THRESHOLD=0.68
 ```
 
 ### Local Development
@@ -252,14 +276,14 @@ scripts/books/
     tales-from-the-yawning-portal/
 ```
 
-The folder name under `adventures/` becomes the `adventure_slug` stored in the database and must match the slug used when creating sessions. Then run:
+The folder name under `adventures/` becomes the `adventure_slug` stored in Qdrant and must match the slug used when creating sessions. Then run:
 
 ```bash
-pip install ollama supabase pypdf
+pip install qdrant-client cohere pymupdf python-dotenv
 python scripts/ingest.py
 ```
 
-The script is idempotent — it checks for existing document titles and skips anything already ingested, so it's safe to re-run after adding new PDFs.
+The script is idempotent — it checks for existing chunks by `source` + `chunk_index` and skips anything already ingested, so it's safe to re-run after adding new PDFs.
 
 ---
 
@@ -308,7 +332,8 @@ Implementation details are documented in [docs/GAME_MECHANICS.md](docs/GAME_MECH
 | 13    | Death resolution — 0 HP as narrative pivot, not game over           | ✅ Complete |
 | 14    | Multi-adventure support — scoped RAG, per-adventure DM tone         | ✅ Complete |
 | 15    | D&D-aware text splitting — structure-preserving chunking pipeline   | ✅ Complete |
-| 16    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
+| 16    | Qdrant migration — vector store moved off Supabase pgvector         | ✅ Complete |
+| 17    | Polish — UI theme, mobile, PDF export                               | 🔲 Upcoming |
 
 ---
 
@@ -342,66 +367,64 @@ npm run eval:rag
 - Write unit tests for new features
 - Follow existing patterns in `lib/combat/`
 
-````
-
 ---
 
 ## 2. API Documentation
-
-You have many API routes - add OpenAPI/Swagger or inline docs:
-
-```markdown
-## API Documentation
 
 See `docs/API_DOCS.md` for detailed OpenAPI spec.
 
 Quick reference:
 
-| Endpoint                    | Method   | Description                               |
-| --------------------------- | -------- | ----------------------------------------- |
-| `/api/chat`                 | POST     | RAG pipeline + combat state updates       |
-| `/api/sessions`             | POST     | Create new session with opening narration |
-| `/api/combat/[id]`         | PATCH    | Submit player initiative roll             |
-| `/api/journal`              | POST     | Generate journal entry at session end     |
-````
+| Endpoint           | Method | Description                               |
+| ------------------ | ------ | ----------------------------------------- |
+| `/api/chat`        | POST   | RAG pipeline + combat state updates       |
+| `/api/sessions`    | POST   | Create new session with opening narration |
+| `/api/combat/[id]` | PATCH  | Submit player initiative roll             |
+| `/api/journal`     | POST   | Generate journal entry at session end     |
 
 ---
 
 ## 3. Data Model
 
-You use Supabase - add a schema section:
-
-```markdown
-## Database Schema
-
-Key tables:
+Key tables (Supabase):
 
 - `sessions` — Active play sessions with character context
-- `journal_entries` — End-of-session summaries
-- `combat_states` — Combat tracker state
-- `chat_messages` — Session conversation history
-- `document_chunks` — Ingested knowledge chunks
+- `messages` — Session conversation history
+- `combat_state` — Combat tracker state
+- `characters` — Premade character roster
+- `turn_metrics` — Per-turn observability data
+
+Vector store (Qdrant Cloud):
+
+- Collection `dnd_chunks` — All ingested chunks with Cohere embeddings, indexed by `category`, `adventure_slug`, `source`, and `chunk_index`
 
 See `docs/SETUP_AND_SCHEMA.md` for full schema.
-```
 
 ---
 
 ## 4. Environment Variables Reference
 
-Expand on your current section:
-
-```markdown
-## Environment Variables (Expanded)
-
 ### LLM Configuration
 
-| Variable             | Default | Description                              |
-| -------------------- | ------- | ---------------------------------------- |
-| `LLM_PROVIDER`       | -       | `ollama` \| `groq` (overrides local/dev) |
-| `OLLAMA_CHAT_MODEL`  | -       | Must match `ollama list` exactly         |
-| `OLLAMA_EMBED_MODEL` | -       | Must match ingestion model               |
-| `GROQ_CHAT_MODEL`    | -       | Model name for Groq API                  |
+| Variable            | Default | Description                                |
+| ------------------- | ------- | ------------------------------------------ |
+| `LLM_PROVIDER`      | -       | `ollama` \| `groq` (overrides auto-detect) |
+| `OLLAMA_CHAT_MODEL` | -       | Must match `ollama list` exactly           |
+| `GROQ_CHAT_MODEL`   | -       | Model name for Groq API                    |
+
+### Cohere
+
+| Variable         | Description                       |
+| ---------------- | --------------------------------- |
+| `COHERE_API_KEY` | Used for embeddings and reranking |
+
+### Qdrant
+
+| Variable            | Description                             |
+| ------------------- | --------------------------------------- |
+| `QDRANT_URL`        | Your Qdrant Cloud cluster URL           |
+| `QDRANT_API_KEY`    | Qdrant Cloud API key                    |
+| `QDRANT_COLLECTION` | Collection name (default: `dnd_chunks`) |
 
 ### Supabase
 
@@ -410,87 +433,85 @@ Expand on your current section:
 | `NEXT_PUBLIC_SUPABASE_URL`             | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Client-side public key    |
 | `SUPABASE_SECRET_KEY`                  | Server-side secret key    |
-```
+
+### RAG Tuning
+
+| Variable                        | Default | Description                            |
+| ------------------------------- | ------- | -------------------------------------- |
+| `RAG_MAX_CHUNKS`                | `4`     | Max chunks returned per query (1–12)   |
+| `RAG_MIN_SIMILARITY`            | `0.2`   | Minimum similarity threshold (0.0–1.0) |
+| `RAG_CONFIDENCE_LOW_THRESHOLD`  | `0.38`  | Below this → "low" confidence level    |
+| `RAG_CONFIDENCE_HIGH_THRESHOLD` | `0.68`  | Above this → "high" confidence level   |
 
 ---
 
-## 5. Troubleshooting Ollama
+## 5. Troubleshooting
 
-````markdown
-## Ollama Setup
-
-### Verify Installation
+### Ollama
 
 ```bash
 ollama list
-# Ensure models match exactly:
+# Ensure chat model matches exactly:
 # - ollama_chat_model = llama3.1:8b (not llama3)
-# - ollama_embed_model = mxbai-embed-large
 ```
-````
-
-### Troubleshooting
 
 - Ollama not responding? Run in another terminal: `ollama serve`
 - Model not found? Run: `ollama pull <model_name>`
 - Streaming issues? Check disk space and RAM
 
-````
+### Qdrant
+
+- `400 Bad Request: Index required` — payload indexes weren't created. Re-run `ingest.py`; `ensure_collection()` creates them automatically.
+- `QDRANT_URL KeyError` — `.env.local` not found. Run `ingest.py` from the project root, not from `scripts/`.
+- Chunk count unexpectedly high — HTML tags leaked into text. Ensure you're on the latest `ingest.py` which calls `strip_html()` after `html_tables_to_markdown()`.
 
 ---
 
 ## 6. Deployment Guide
 
-```markdown
-## Deployment to Vercel
-
 ### Setup
 
 1. Connect your GitHub repo to Vercel
-2. Add environment variables (`.env` → Vercel secrets)
+2. Add environment variables in Vercel dashboard (all vars from `.env.local`)
 3. Deploy: `vercel deploy --prod`
+
+### Qdrant Cloud
+
+- Create a free cluster at [cloud.qdrant.io](https://cloud.qdrant.io)
+- Copy the cluster URL and API key into Vercel env vars
+- Run ingestion locally before deploying — Qdrant Cloud is accessible from anywhere
 
 ### Supabase
 
 - Production project recommended
 - Export `SUPABASE_SECRET_KEY` to Vercel
 - Enable RLS (Row Level Security) for production
-````
 
 ---
 
-## 7. Document Ingestion Details
-
-Expand on your ingestion section:
-
-```markdown
-## Document Ingestion Pipeline
+## 7. Document Ingestion Pipeline
 
 ### Supported Formats
 
 - PDF (single/multiple pages per document)
-- Markdown files (for quick testing)
 
 ### Chunking Strategy
 
 - Default: ~1000 characters with 100-character overlap
-- D&D-aware splitting via `DndTextSplitter`
-- Preserves tables and structured content
-- Tags chunks with `category` and `adventure_slug`
+- D&D-aware splitting via `DndTextSplitter` (prose) and `TableSplitter` (pages with Markdown tables)
+- `build_boilerplate_blacklist()` strips running headers/footers before chunking
+- `is_junk_page()` skips TOC pages and OCR garbage
+- Tags chunks with `category` and `adventure_slug` as Qdrant payload
 
 ### Adding Custom Content
 
 1. Place PDF in `scripts/books/<folder>/`
 2. Run `python scripts/ingest.py`
-3. Chunks appear in Supabase within seconds
-```
+3. Chunks appear in Qdrant within seconds
 
 ---
 
 ## 8. Character System
-
-```markdown
-## Character System
 
 ### Premade Characters
 
@@ -503,14 +524,10 @@ Expand on your ingestion section:
 - Create from scratch via session creation
 - Character context injected via `characterContext` field
 - Supports custom homebrew content
-```
 
 ---
 
 ## 9. Journal System
-
-```markdown
-## Journal System
 
 ### What Gets Saved
 
@@ -528,14 +545,10 @@ Triggered automatically when:
 - Session duration threshold reached
 
 Customize generation prompt in `app/api/journal/prompt.ts`
-```
 
 ---
 
 ## 10. Combat System Details
-
-```markdown
-## Combat System
 
 ### Components
 
@@ -551,44 +564,36 @@ Customize generation prompt in `app/api/journal/prompt.ts`
 - Damage calculation
 - Death resolution (narrative, not hard stop)
 - Turn enforcement (monsters act before player)
-```
 
 ---
 
 ## 11. RAG Pipeline Details
 
-```markdown
-## RAG Pipeline
-
 ### Components
 
-- `lib/rag.ts` — Embeddings and retrieval
-- `lib/search/` — Search service
+- `lib/rag.ts` — Embeddings, hybrid retrieval, and reranking
 - `lib/parse-dm-response.ts` — Response parsing
 
 ### How It Works
 
-1. User asks question/enters action
-2. Embed query via Ollama `mxbai-embed-large`
-3. Retrieve relevant chunks from Supabase
-4. Inject chunks into LLM prompt
-5. Stream response via Ollama/Groq
-6. Parse response for structured content
-```
+1. User asks question / enters action
+2. Embed query via Cohere `embed-english-v3.0`
+3. Run hybrid search against Qdrant: vector similarity + full-text keyword match, both scoped to core rulebooks + active adventure
+4. Merge results with configurable vector/keyword weights (default 0.7/0.3)
+5. Rerank top candidates via Cohere `rerank-english-v3.0`
+6. Inject chunks into LLM prompt
+7. Stream response via Ollama / Groq
+8. Parse response for structured `[STATUS]` / `[HINTS]` content
 
 ---
 
 ## 12. RAG Evaluation
-
-````markdown
-## RAG Evaluation
 
 Run built-in evals to test retrieval quality:
 
 ```bash
 npm run eval:rag
 ```
-````
 
 Test cases include:
 
@@ -599,14 +604,9 @@ Test cases include:
 
 See `docs/RAG_EVALS.md` for details.
 
-````
-
 ---
 
 ## 13. Error Handling
-
-```markdown
-## Error Handling
 
 ### Player-Facing Messages
 
@@ -620,51 +620,41 @@ Enable verbose logging:
 
 ```bash
 NODE_ENV=development npm run dev
-````
+```
 
 See `lib/observability.ts` for logging utilities.
-
-````
 
 ---
 
 ## 14. Performance Notes
 
-```markdown
-## Performance
-
 ### Document Size
 
 Recommended:
+
 - Core rulebooks: ~100 pages each
-- Adventure modules: ~50-100 pages
-- Total chunks: <50,000 for optimal performance
+- Adventure modules: ~50–100 pages
+- Total chunks: <50,000 for optimal Qdrant free tier performance
 
 ### Streaming
 
-- Expected response time: 2-8 seconds
-- Depends on Ollama model load
-- Groq provides faster responses when enabled
+- Expected response time: 2–8 seconds
+- Depends on LLM provider; Groq provides faster responses in production
 
-### Memory
+### Cohere Rate Limits
 
-Ollama models require:
-- `llama3.1:8b` — ~5GB RAM
-- `mxbai-embed-large` — ~3GB RAM
-````
+- Free tier: 100 embed calls/minute, 100 rerank calls/minute
+- Sufficient for development; upgrade if running concurrent sessions in production
 
 ---
 
 ## 15. Security Notes
 
-```markdown
-## Security
-
 ### Production Checklist
 
 - Enable Supabase RLS (Row Level Security)
 - Rotate keys periodically
-- Use separate Supabase project for production
+- Use separate Supabase and Qdrant projects for production
 - Rate limit API routes
 - Enable HTTPS (Vercel handles this)
 
@@ -673,15 +663,11 @@ Ollama models require:
 - Never commit `.env` to Git
 - Use `.env.local` for local development
 - Add `.env.example` to repo with placeholders
-```
 
 ---
 
 ## 16. Licensing
 
-Add a licensing section:
-
-```markdown
 ## License
 
 MIT License — See LICENSE file for details.
@@ -698,33 +684,23 @@ MIT License — See LICENSE file for details.
 - Commercial distribution without permission
 - Redistribution of source rulebooks
 - Use with prohibited LLMs
-```
 
 ---
 
-## 17. Showcase / Features
-
-Expand your feature list:
-
-```markdown
-## Features
+## 17. Features
 
 - ✨ **Immersive Storytelling** — AI DM with rich narrative
 - 🎲 **Full Combat Tracker** — Initiative, attacks, damage
-- 📚 **Scoped RAG** — Adventure-aware knowledge retrieval
+- 📚 **Scoped RAG** — Adventure-aware hybrid knowledge retrieval with Cohere reranking
 - 📖 **Auto Journal** — Campaign journal built automatically
 - 🧙 **Character Sheets** — Premade + custom character support
 - 💀 **Death Resolution** — Narrative continues after player death
 - 🔄 **Session Resume** — Pause and continue anytime
 - 📱 **Mobile-Ready** — Touch-friendly interface
-```
 
 ---
 
 ## 18. Roadmap
-
-```markdown
-## Roadmap
 
 ### Phase 1: Foundation (✅ Complete)
 
@@ -738,24 +714,27 @@ Expand your feature list:
 - Combat tracking
 - Journal system
 
-### Phase 3: Polish (🔲 Planned)
+### Phase 3: Infrastructure (✅ Complete)
+
+- Qdrant Cloud vector store migration
+- Cohere embeddings + reranking
+- Hybrid search (vector + keyword)
+
+### Phase 4: Polish (🔲 Planned)
 
 - PDF export
 - Advanced UI theming
 - Multi-platform support
 - Custom spell/monster editor
-```
 
 ---
 
 ## 19. Credits
 
-```markdown
-## Credits
-
 - **Base Models**: Ollama (Llama 3), Groq
-- **Vector Embeddings**: mxbai-embed-large
-- **Database**: Supabase (PostgreSQL + pgvector)
+- **Embeddings & Reranking**: Cohere (`embed-english-v3.0`, `rerank-english-v3.0`)
+- **Vector Store**: Qdrant Cloud
+- **Database**: Supabase (PostgreSQL)
 - **UI**: Tailwind CSS, Next.js
 
 **Special Thanks**:
@@ -763,4 +742,3 @@ Expand your feature list:
 - D&D Open Game License content
 - D&D Beyond (for inspiration)
 - Open-source community
-```
