@@ -181,6 +181,13 @@ Sign up at [cloud.qdrant.io](https://cloud.qdrant.io) and create a free cluster.
 QDRANT_URL=https://your-cluster.qdrant.io
 QDRANT_API_KEY=your_qdrant_api_key
 QDRANT_COLLECTION=dnd_chunks
+
+# Embeddings (local Ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_EMBED_MODEL=mxbai-embed-large
+
+# Reranking only
+COHERE_API_KEY=your_cohere_api_key
 ```
 
 ### 2. Run ingestion
@@ -188,7 +195,7 @@ QDRANT_COLLECTION=dnd_chunks
 The ingestion script creates the collection and all required payload indexes automatically on first run:
 
 ```bash
-pip install qdrant-client cohere pymupdf python-dotenv
+pip install qdrant-client pymupdf python-dotenv
 python scripts/ingest.py
 ```
 
@@ -198,7 +205,7 @@ This is the only setup step required. No manual collection or index creation is 
 
 `ingest.py → ensure_collection()` creates:
 
-**Collection** — `dnd_chunks` with cosine similarity, 1024-dimensional vectors (Cohere `embed-english-v3.0`):
+**Collection** — `dnd_chunks` with cosine similarity, 1024-dimensional vectors (Ollama `mxbai-embed-large`):
 
 ```
 VectorParams(size=1024, distance=Distance.COSINE)

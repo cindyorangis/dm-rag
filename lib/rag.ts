@@ -1,5 +1,21 @@
 import { CohereClient } from "cohere-ai";
 
+interface QdrantCondition {
+  key?: string;
+  match?: {
+    value?: string | number | boolean;
+    text?: string;
+  };
+  must?: QdrantCondition[];
+  should?: QdrantCondition[];
+  must_not?: QdrantCondition[];
+}
+
+interface QdrantFilter {
+  must?: QdrantCondition[];
+  should?: QdrantCondition[];
+  must_not?: QdrantCondition[];
+}
 let _cohereClient: CohereClient | null = null;
 
 function getCohereClient(): CohereClient {
@@ -19,7 +35,7 @@ const COLLECTION = process.env.QDRANT_COLLECTION ?? "dnd_chunks";
 
 async function qdrantSearch(params: {
   vector: number[];
-  filter: Record<string, unknown>;
+  filter: QdrantFilter;
   limit: number;
   withPayload?: boolean;
 }): Promise<QdrantPoint[]> {
@@ -51,7 +67,7 @@ async function qdrantSearch(params: {
 
 async function qdrantKeywordSearch(params: {
   query: string;
-  filter: Record<string, unknown>;
+  filter: QdrantFilter;
   limit: number;
 }): Promise<QdrantPoint[]> {
   // Qdrant full-text search via scroll + payload filter on content field.
@@ -69,9 +85,7 @@ async function qdrantKeywordSearch(params: {
       body: JSON.stringify({
         filter: {
           must: [
-            ...((params.filter as any).should
-              ? [{ should: (params.filter as any).should }]
-              : []),
+            ...(params.filter.should ? [{ should: params.filter.should }] : []),
             {
               key: "content",
               match: { text: params.query },
@@ -84,12 +98,6 @@ async function qdrantKeywordSearch(params: {
       }),
     },
   );
-
-  if (!res.ok) {
-    throw new Error(
-      `Qdrant keyword search error: ${res.status} ${await res.text()}`,
-    );
-  }
 
   const data = await res.json();
   // scroll returns { result: { points: [...], next_page_offset } }
@@ -112,7 +120,7 @@ interface QdrantPoint {
  * Qdrant filter scoped to core rulebooks OR the active adventure module.
  * Mirrors the original `match_chunks_scoped` Supabase RPC behaviour.
  */
-function scopedFilter(adventureSlug: string): Record<string, unknown> {
+function scopedFilter(adventureSlug: string): QdrantFilter {
   return {
     should: [
       { key: "category", match: { value: "core" } },

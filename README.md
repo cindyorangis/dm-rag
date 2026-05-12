@@ -49,16 +49,16 @@ When you ask a rules question, describe an action, or enter combat, the app retr
 
 ## Tech Stack
 
-| Layer      | Choice                            | Notes                                                         |
-| ---------- | --------------------------------- | ------------------------------------------------------------- |
-| Frontend   | Next.js (App Router) + TypeScript | App Router, server and client components                      |
-| Styling    | Tailwind CSS                      | Dark fantasy / parchment UI theme                             |
-| LLM        | Ollama (Llama 3) / Groq           | Local inference or Groq API; configurable via `LLM_PROVIDER`  |
-| Embeddings | Cohere `embed-english-v3.0`       | 1024-dimensional embeddings; used for ingestion and retrieval |
-| Reranking  | Cohere `rerank-english-v3.0`      | Cross-encoder reranking after hybrid retrieval                |
-| Vector DB  | Qdrant Cloud                      | Cosine similarity; payload-indexed for scoped filtering       |
-| Database   | Supabase (PostgreSQL)             | Sessions, messages, journal entries, combat state             |
-| Hosting    | Vercel                            | Free tier, zero-config Next.js deploys                        |
+| Layer      | Choice                            | Notes                                                        |
+| ---------- | --------------------------------- | ------------------------------------------------------------ |
+| Frontend   | Next.js (App Router) + TypeScript | App Router, server and client components                     |
+| Styling    | Tailwind CSS                      | Dark fantasy / parchment UI theme                            |
+| LLM        | Ollama (Llama 3) / Groq           | Local inference or Groq API; configurable via `LLM_PROVIDER` |
+| Embeddings | Ollama `mxbai-embed-large`        | Local 1024-dim embeddings; free, no API calls                |
+| Reranking  | Cohere `rerank-english-v3.0`      | Cross-encoder reranking after retrieval (query-time only)    |
+| Vector DB  | Qdrant Cloud                      | Cosine similarity; payload-indexed for scoped filtering      |
+| Database   | Supabase (PostgreSQL)             | Sessions, messages, journal entries, combat state            |
+| Hosting    | Vercel                            | Free tier, zero-config Next.js deploys                       |
 
 ---
 
@@ -77,7 +77,7 @@ scripts/books/
     tales-from-the-yawning-portal/
 ```
 
-Each PDF is parsed, chunked into ~1000 character sections with 100-character overlap, and embedded via Cohere `embed-english-v3.0`. Chunks are stored in Qdrant Cloud, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
+Each PDF is parsed, chunked into ~1000 character sections with 100-character overlap, and embedded via local Ollama `mxbai-embed-large`. Chunks are stored in Qdrant Cloud, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
 
 Run ingestion once per new book:
 
@@ -149,7 +149,7 @@ app/
  |                                    # and hints; structured parser with freeform fallback
  ├── rag.ts                           # embedText() + retrieveChunks(query, adventureSlug) —
  |                                    # hybrid vector + keyword search via Qdrant Cloud;
- |                                    # Cohere embeddings + reranking; scoped to core
+ |                                    # Ollama embeddings; Cohere reranking; scoped to core
  |                                    # rulebooks + active adventure chunks
  └── supabase.ts                      # Supabase client (browser + admin)
  hooks/
@@ -167,8 +167,8 @@ scripts/
  |                                    # TableSplitter with overlap-aware prose chunking;
  |                                    # shared DndSplitter interface for all three types
  └── ingest.py                        # Document ingestion pipeline — processes core/ and
-                                      # adventures/ subdirectories; embeds via Cohere;
-                                      # upserts to Qdrant Cloud with payload indexes for
+                                      # adventures/ subdirectories; embeds via local Ollama
+                                      # mxbai-embed-large; upserts to Qdrant Cloud with payload indexes for
                                       # scoped RAG filtering by category + adventure_slug
 ```
 
@@ -206,7 +206,7 @@ scripts/
 - Node.js 18+
 - Python 3.9+
 - Ollama installed and running locally (for local LLM inference)
-- Cohere account (free tier sufficient for development)
+- Cohere account (free tier — reranking only, not embeddings)
 - Qdrant Cloud account (free tier: 1GB)
 - Supabase account (free)
 - Vercel account for deployment (free)
@@ -215,9 +215,10 @@ scripts/
 
 ```bash
 ollama pull llama3.1:8b
+ollama pull mxbai-embed-large
 ```
 
-> Run `ollama list` to verify your installed model names. The chat model name in your `.env.local` must exactly match what Ollama reports (e.g. `llama3.2` instead of `llama3`). Embeddings are now handled by Cohere — `mxbai-embed-large` is no longer required.
+> Run `ollama list` to verify your installed model names. Both model names must exactly match what Ollama reports. `mxbai-embed-large` is used for ingestion and query-time embedding; `llama3.1:8b` for local chat inference.
 
 ### Environment Variables
 
@@ -232,11 +233,12 @@ QDRANT_URL=https://your-cluster.qdrant.io
 QDRANT_API_KEY=your_qdrant_api_key
 QDRANT_COLLECTION=dnd_chunks
 
-# Cohere (embeddings + reranking)
+# Cohere (reranking only — embeddings use Ollama)
 COHERE_API_KEY=your_cohere_api_key
 
-# LLM — local Ollama
+# LLM + Embeddings — local Ollama
 OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_EMBED_MODEL=mxbai-embed-large
 OLLAMA_CHAT_MODEL=llama3.1:8b
 
 # LLM — Groq (faster; used in production by default)
@@ -279,11 +281,11 @@ scripts/books/
 The folder name under `adventures/` becomes the `adventure_slug` stored in Qdrant and must match the slug used when creating sessions. Then run:
 
 ```bash
-pip install qdrant-client cohere pymupdf python-dotenv
+pip install qdrant-client pymupdf python-dotenv
 python scripts/ingest.py
 ```
 
-The script is idempotent — it checks for existing chunks by `source` + `chunk_index` and skips anything already ingested, so it's safe to re-run after adding new PDFs.
+The script is idempotent — it checks whether any chunks from a given source file already exist in Qdrant and skips the whole file if so. Safe to re-run after adding new PDFs.
 
 ---
 
@@ -396,7 +398,7 @@ Key tables (Supabase):
 
 Vector store (Qdrant Cloud):
 
-- Collection `dnd_chunks` — All ingested chunks with Cohere embeddings, indexed by `category`, `adventure_slug`, `source`, and `chunk_index`
+- Collection `dnd_chunks` — All ingested chunks with Ollama `mxbai-embed-large` embeddings, indexed by `category`, `adventure_slug`, `source`, and `chunk_index`
 
 See `docs/SETUP_AND_SCHEMA.md` for full schema.
 
@@ -406,17 +408,18 @@ See `docs/SETUP_AND_SCHEMA.md` for full schema.
 
 ### LLM Configuration
 
-| Variable            | Default | Description                                |
-| ------------------- | ------- | ------------------------------------------ |
-| `LLM_PROVIDER`      | -       | `ollama` \| `groq` (overrides auto-detect) |
-| `OLLAMA_CHAT_MODEL` | -       | Must match `ollama list` exactly           |
-| `GROQ_CHAT_MODEL`   | -       | Model name for Groq API                    |
+| Variable             | Default             | Description                                   |
+| -------------------- | ------------------- | --------------------------------------------- |
+| `LLM_PROVIDER`       | -                   | `ollama` \| `groq` (overrides auto-detect)    |
+| `OLLAMA_EMBED_MODEL` | `mxbai-embed-large` | Must match `ollama list`; used for embeddings |
+| `OLLAMA_CHAT_MODEL`  | -                   | Must match `ollama list`; used for chat       |
+| `GROQ_CHAT_MODEL`    | -                   | Model name for Groq API                       |
 
 ### Cohere
 
-| Variable         | Description                       |
-| ---------------- | --------------------------------- |
-| `COHERE_API_KEY` | Used for embeddings and reranking |
+| Variable         | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `COHERE_API_KEY` | Used for reranking only (embeddings use Ollama) |
 
 ### Qdrant
 
@@ -457,6 +460,7 @@ ollama list
 
 - Ollama not responding? Run in another terminal: `ollama serve`
 - Model not found? Run: `ollama pull <model_name>`
+- Embedding errors? Ensure `mxbai-embed-large` is pulled: `ollama pull mxbai-embed-large`
 - Streaming issues? Check disk space and RAM
 
 ### Qdrant
@@ -577,7 +581,7 @@ Customize generation prompt in `app/api/journal/prompt.ts`
 ### How It Works
 
 1. User asks question / enters action
-2. Embed query via Cohere `embed-english-v3.0`
+2. Embed query via local Ollama `mxbai-embed-large`
 3. Run hybrid search against Qdrant: vector similarity + full-text keyword match, both scoped to core rulebooks + active adventure
 4. Merge results with configurable vector/keyword weights (default 0.7/0.3)
 5. Rerank top candidates via Cohere `rerank-english-v3.0`
@@ -643,8 +647,9 @@ Recommended:
 
 ### Cohere Rate Limits
 
-- Free tier: 100 embed calls/minute, 100 rerank calls/minute
-- Sufficient for development; upgrade if running concurrent sessions in production
+- Cohere is used for reranking only — embeddings run locally via Ollama at no cost
+- Free trial: 1,000 rerank calls/month; sufficient for light development use
+- Upgrade to a Cohere production key for heavier usage
 
 ---
 
@@ -717,7 +722,8 @@ MIT License — See LICENSE file for details.
 ### Phase 3: Infrastructure (✅ Complete)
 
 - Qdrant Cloud vector store migration
-- Cohere embeddings + reranking
+- Ollama local embeddings (`mxbai-embed-large`)
+- Cohere reranking
 - Hybrid search (vector + keyword)
 
 ### Phase 4: Polish (🔲 Planned)
@@ -732,7 +738,8 @@ MIT License — See LICENSE file for details.
 ## 19. Credits
 
 - **Base Models**: Ollama (Llama 3), Groq
-- **Embeddings & Reranking**: Cohere (`embed-english-v3.0`, `rerank-english-v3.0`)
+- **Embeddings**: Ollama `mxbai-embed-large` (local, free)
+- **Reranking**: Cohere `rerank-english-v3.0`
 - **Vector Store**: Qdrant Cloud
 - **Database**: Supabase (PostgreSQL)
 - **UI**: Tailwind CSS, Next.js
