@@ -1,310 +1,310 @@
+"""
+ingest.py — D&D RAG ingestion pipeline (Qdrant Cloud)
+
+Usage (run from project root):
+  python scripts/ingest.py
+
+Required env vars (in .env.local):
+  QDRANT_URL        https://your-cluster.qdrant.io
+  QDRANT_API_KEY    from Qdrant Cloud console
+  QDRANT_COLLECTION default: dnd_chunks
+  COHERE_API_KEY    for embed-english-v3.0
+
+pip install qdrant-client cohere pymupdf python-dotenv
+"""
+
+from __future__ import annotations
+
 import os
-import time
+import sys
+import uuid
 from pathlib import Path
 
-# Load .env.local manually (before any other imports that read env vars)
-env_path = Path(__file__).parent.parent / ".env.local"
-if env_path.exists():
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                os.environ.setdefault(key.strip(), value.strip())
+# ── Load env ───────────────────────────────────────────────────────────────
 
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env.local")
+
+# ── Imports ────────────────────────────────────────────────────────────────
+
+import re
+import fitz  # PyMuPDF
 import cohere
-from llama_cloud import LlamaCloud
-from supabase import create_client
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 
+# dnd_splitters lives next to this script
+sys.path.insert(0, str(Path(__file__).parent))
 from dnd_splitters import (
     SplitterFactory,
-    Document,
-    is_junk_page,
     clean_pdf_text,
     build_boilerplate_blacklist,
     remove_boilerplate,
     html_tables_to_markdown,
+    is_junk_page,
+    is_real_markdown_table,
+    Document,
 )
 
 # ── Config ─────────────────────────────────────────────────────────────────
-SUPABASE_URL = os.environ["NEXT_PUBLIC_SUPABASE_URL"]
-SUPABASE_KEY = os.environ["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]
-LLAMA_CLOUD_API_KEY = os.environ["LLAMA_CLOUD_API_KEY"]
+
+QDRANT_URL = os.environ["QDRANT_URL"]
+QDRANT_API_KEY = os.environ["QDRANT_API_KEY"]
 COHERE_API_KEY = os.environ["COHERE_API_KEY"]
-BOOKS_DIR = Path(__file__).parent / "books"
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "dnd_chunks")
+BOOKS_DIR = Path(__file__).parent.parent / "scripts" / "books"
+
 CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 150
+CHUNK_OVERLAP = 100
+BATCH_SIZE = 100
 
-# Cohere embed model — must match rag.ts embedText()
-EMBED_MODEL = "embed-english-v3.0"
-EMBED_DIMENSION = 1024  # embed-english-v3.0 output dimension
-
-# Cohere rate limit: 100 calls/min on trial, 10k/min on production
-# Batch up to 96 texts per call (Cohere max is 96)
-EMBED_BATCH_SIZE = 96
-EMBED_RATE_LIMIT_DELAY = 0.1  # seconds between batches (conservative)
+# Cohere embed-english-v3.0 → 1024 dims
+VECTOR_SIZE = 1024
 
 # ── Clients ────────────────────────────────────────────────────────────────
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-co = cohere.Client(api_key=COHERE_API_KEY)
 
-# ── Splitters ──────────────────────────────────────────────────────────────
-table_splitter = SplitterFactory.create("table", CHUNK_SIZE, CHUNK_OVERLAP)
-prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
+qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+co = cohere.Client(COHERE_API_KEY)
+
+
+def strip_html(text: str) -> str:
+    """Remove any HTML tags that survived html_tables_to_markdown."""
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+# ── Collection setup ───────────────────────────────────────────────────────
+
+
+def ensure_collection() -> None:
+    from qdrant_client.models import PayloadSchemaType
+
+    existing = [c.name for c in qdrant.get_collections().collections]
+    if COLLECTION_NAME not in existing:
+        qdrant.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+        )
+        print(f"✅ Created collection: {COLLECTION_NAME}")
+    else:
+        print(f"ℹ️  Collection exists: {COLLECTION_NAME}")
+
+    # Payload indexes required for filtered scroll (deduplication check)
+    for field, schema in [
+        ("source", PayloadSchemaType.KEYWORD),
+        ("chunk_index", PayloadSchemaType.INTEGER),
+        ("category", PayloadSchemaType.KEYWORD),
+        ("adventure_slug", PayloadSchemaType.KEYWORD),
+    ]:
+        try:
+            qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field,
+                field_schema=schema,
+            )
+        except Exception:
+            pass  # index already exists — safe to ignore
+
+
+# ── Deduplication ──────────────────────────────────────────────────────────
+
+
+def chunk_already_ingested(source: str, chunk_index: int) -> bool:
+    results, _ = qdrant.scroll(
+        collection_name=COLLECTION_NAME,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(key="source", match=MatchValue(value=source)),
+                FieldCondition(key="chunk_index", match=MatchValue(value=chunk_index)),
+            ]
+        ),
+        limit=1,
+        with_payload=False,
+        with_vectors=False,
+    )
+    return len(results) > 0
 
 
 # ── Embedding ──────────────────────────────────────────────────────────────
-def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using Cohere embed-english-v3.0.
 
-    Uses input_type='search_document' for ingestion (vs 'search_query' at retrieval time).
-    This asymmetry is intentional and improves retrieval quality.
-    """
+
+def embed_batch(texts: list[str]) -> list[list[float]]:
     response = co.embed(
         texts=texts,
-        model=EMBED_MODEL,
+        model="embed-english-v3.0",
         input_type="search_document",
         embedding_types=["float"],
     )
     embeddings = response.embeddings
-    # SDK returns EmbedByTypeResponseEmbeddings object; access .float attribute
-    if hasattr(embeddings, "float"):
-        return embeddings.float
-    # Fallback: raw list
-    return embeddings  # type: ignore
+    floats = embeddings if isinstance(embeddings, list) else embeddings.float
+    return floats
 
 
-def get_embedding(text: str) -> list[float]:
-    """Embed a single text. Use get_embeddings_batch for bulk ingestion."""
-    return get_embeddings_batch([text])[0]
+# ── PDF extraction ─────────────────────────────────────────────────────────
 
 
-# ── Extraction Logic ───────────────────────────────────────────────────────
-def extract_text_from_pdf(pdf_path: Path) -> list[tuple[int, str]]:
-    print(f"    ☁️  Sending {pdf_path.name} to Llama Cloud...")
+def extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
+    """Return (page_num, cleaned_text) for every non-junk page."""
+    doc = fitz.open(str(pdf_path))
+    pages: list[tuple[int, str]] = []
 
-    client = LlamaCloud(api_key=LLAMA_CLOUD_API_KEY)
+    for page_num, page in enumerate(doc):
+        raw = page.get_text("html")  # preserves table structure
+        raw = html_tables_to_markdown(raw)
+        raw = strip_html(raw)  # remove residual HTML tags
+        cleaned = clean_pdf_text(raw)
+        if not is_junk_page(cleaned):
+            pages.append((page_num, cleaned))
 
-    pages_per_batch = 50
-    all_pages: list[tuple[int, str]] = []
-
-    try:
-        import pypdf
-
-        reader = pypdf.PdfReader(pdf_path)
-        total_pages = len(reader.pages)
-        print(f"    → {total_pages} pages total")
-    except Exception:
-        total_pages = None
-
-    if total_pages and total_pages > pages_per_batch:
-        import pypdf
-        import tempfile
-
-        reader = pypdf.PdfReader(pdf_path)
-        print(f"    → Splitting into batches of {pages_per_batch} pages")
-
-        for batch_start in range(0, total_pages, pages_per_batch):
-            batch_end = min(batch_start + pages_per_batch, total_pages)
-            print(f"    → Batch pages {batch_start + 1}–{batch_end}...")
-
-            writer = pypdf.PdfWriter()
-            for i in range(batch_start, batch_end):
-                writer.add_page(reader.pages[i])
-
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-                writer.write(tmp)
-
-            try:
-                batch_pages = _parse_pdf_bytes(
-                    client, tmp_path, page_offset=batch_start
-                )
-                all_pages.extend(batch_pages)
-            finally:
-                tmp_path.unlink(missing_ok=True)
-    else:
-        all_pages = _parse_pdf_bytes(client, pdf_path, page_offset=0)
-
-    return all_pages
-
-
-def _parse_pdf_bytes(client, pdf_path: Path, page_offset: int) -> list[tuple[int, str]]:
-    with open(pdf_path, "rb") as f:
-        file = client.files.create(file=f, purpose="parse")
-
-    result = client.parsing.parse(
-        file_id=file.id,
-        tier="agentic",
-        version="latest",
-        expand=["markdown"],
-    )
-
-    pages = []
-    if result.markdown and result.markdown.pages:
-        for page in result.markdown.pages:
-            page_num = getattr(page, "page_number", None)
-            if page_num is None:
-                page_num = len(pages) + 1 + page_offset
-            else:
-                page_num = page_num + page_offset
-
-            text = page.markdown.strip() if page.markdown else ""
-            if text:
-                pages.append((page_num, text))
-
+    doc.close()
     return pages
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────
-def chunk_page(page_num: int, text: str, source: str) -> list[Document]:
-    if is_junk_page(text):
-        return []
-
-    import re
-
-    text = re.sub(r"!\[.*?\]\(.*?\)\n?", "", text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = html_tables_to_markdown(text)
-    text = clean_pdf_text(text)
-
-    if len(text.strip()) < 50:
-        return []
-
-    has_table = "|" in text
-    docs = (
-        table_splitter.create_documents([text], source=source)
-        if has_table
-        else prose_splitter.create_documents([text])
-    )
-
-    for doc in docs:
-        doc.metadata["page"] = page_num
-
-    return docs
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────
-def document_already_ingested(title: str) -> bool:
-    result = supabase.table("documents").select("id").eq("title", title).execute()
-    return len(result.data) > 0
+def chunk_pages(pages: list[tuple[int, str]], source: str) -> list[Document]:
+    """
+    Route each page through the right splitter:
+      - TableSplitter  → pages with real Markdown tables
+      - DndTextSplitter → pure prose pages
+    """
+    # Build boilerplate blacklist from all pages first
+    blacklist = build_boilerplate_blacklist(pages)
 
+    table_splitter = SplitterFactory.create("table", CHUNK_SIZE, CHUNK_OVERLAP)
+    prose_splitter = SplitterFactory.create("dnd", CHUNK_SIZE, CHUNK_OVERLAP)
 
-# ── Main Processing Logic ──────────────────────────────────────────────────
-def process_file(pdf_path: Path, category: str, adventure_slug: str | None):
-    title = pdf_path.name
-    if document_already_ingested(title):
-        print(f"  ⚠️  {title} already ingested, skipping.")
-        return
-
-    print(f"  Processing: {title} ({category} / {adventure_slug or 'N/A'})")
-
-    # 1. Extract pages via LlamaParse
-    pages = extract_text_from_pdf(pdf_path)
-
-    # 2. Strip repeating boilerplate (headers/footers)
-    boilerplate = build_boilerplate_blacklist(pages, min_occurrences=4)
-    if boilerplate:
-        print(f"    → Stripping {len(boilerplate)} boilerplate fragments")
-
-    # 3. Insert document record
-    doc_result = (
-        supabase.table("documents")
-        .insert(
-            {
-                "title": title,
-                "type": "rulebook",
-                "category": category,
-                "adventure_slug": adventure_slug,
-            }
-        )
-        .execute()
-    )
-    doc_id = doc_result.data[0]["id"]
-
-    # 4. Chunk all pages
     all_docs: list[Document] = []
-    for page_num, page_text in pages:
-        page_text = remove_boilerplate(page_text, boilerplate)
-        page_text = clean_pdf_text(page_text)
-        if is_junk_page(page_text) or len(page_text.strip()) < 50:
+
+    for page_num, text in pages:
+        clean = remove_boilerplate(text, blacklist)
+        if not clean.strip():
             continue
-        all_docs.extend(chunk_page(page_num, page_text, source=title))
 
-    print(f"    → {len(pages)} pages → {len(all_docs)} chunks")
+        splitter = table_splitter if is_real_markdown_table(clean) else prose_splitter
+        docs = splitter.create_documents([clean], source=source)
 
-    if not all_docs:
-        print("  ⚠️  No chunks produced, skipping insert.")
+        # Tag every doc with its page number
+        for doc in docs:
+            doc.metadata.setdefault("page", page_num)
+
+        all_docs.extend(docs)
+
+    return all_docs
+
+
+# ── Upsert ─────────────────────────────────────────────────────────────────
+
+
+def upsert_chunks(
+    docs: list[Document],
+    source: str,
+    category: str,
+    adventure_slug: str,
+) -> None:
+    pending_docs: list[Document] = []
+    pending_idxs: list[int] = []
+
+    def flush(batch_docs: list[Document], batch_idxs: list[int]) -> None:
+        if not batch_docs:
+            return
+        vectors = embed_batch([d.page_content for d in batch_docs])
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vectors[i],
+                payload={
+                    "content": batch_docs[i].page_content,
+                    "source": source,
+                    "category": category,
+                    "adventure_slug": adventure_slug,
+                    "chunk_index": batch_idxs[i],
+                    **batch_docs[i].metadata,
+                },
+            )
+            for i in range(len(batch_docs))
+        ]
+        qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+        print(f"    ↑ upserted {len(points)} chunks")
+
+    skipped = 0
+    for i, doc in enumerate(docs):
+        if chunk_already_ingested(source, i):
+            skipped += 1
+            continue
+
+        pending_docs.append(doc)
+        pending_idxs.append(i)
+
+        if len(pending_docs) >= BATCH_SIZE:
+            flush(pending_docs, pending_idxs)
+            pending_docs, pending_idxs = [], []
+
+    flush(pending_docs, pending_idxs)
+
+    if skipped:
+        print(f"    ⏭  skipped {skipped} already-ingested chunks")
+
+
+# ── Per-file entry point ────────────────────────────────────────────────────
+
+
+def ingest_file(pdf_path: Path, category: str, adventure_slug: str) -> None:
+    source = pdf_path.name
+    print(f"\n📄 {source}  [{category}]")
+
+    pages = extract_pages(pdf_path)
+    if not pages:
+        print("   ⚠️  No usable pages found, skipping.")
         return
 
-    # 5. Embed in batches and insert
-    inserted = 0
-    errors = 0
+    docs = chunk_pages(pages, source)
+    print(f"   → {len(docs)} chunks from {len(pages)} pages")
 
-    for batch_start in range(0, len(all_docs), EMBED_BATCH_SIZE):
-        batch = all_docs[batch_start : batch_start + EMBED_BATCH_SIZE]
-        texts = [doc.page_content for doc in batch]
-
-        try:
-            embeddings = get_embeddings_batch(texts)
-        except Exception as e:
-            print(f"\n  ❌ Embedding error on batch starting at {batch_start}: {e}")
-            errors += len(batch)
-            continue
-
-        rows = [
-            {
-                "document_id": doc_id,
-                "content": doc.page_content,
-                "embedding": embedding,
-                "page": doc.metadata.get("page"),
-            }
-            for doc, embedding in zip(batch, embeddings)
-        ]
-
-        try:
-            supabase.table("chunks").insert(rows).execute()
-            inserted += len(rows)
-        except Exception as e:
-            print(f"\n  ❌ Insert error on batch starting at {batch_start}: {e}")
-            errors += len(batch)
-
-        # Respect Cohere rate limits
-        if batch_start + EMBED_BATCH_SIZE < len(all_docs):
-            time.sleep(EMBED_RATE_LIMIT_DELAY)
-
-        progress = min(batch_start + EMBED_BATCH_SIZE, len(all_docs))
-        print(f"    → Embedded {progress}/{len(all_docs)} chunks...", end="\r")
-
-    print(
-        f"\n  ✅ Done — {inserted}/{len(all_docs)} chunks inserted. ({errors} errors)"
-    )
+    upsert_chunks(docs, source, category, adventure_slug)
 
 
-# ── Main Entry Point ───────────────────────────────────────────────────────
-def ingest_books():
+def ingest_directory(directory: Path, category: str, adventure_slug: str = "") -> None:
+    for pdf in sorted(directory.glob("*.pdf")):
+        ingest_file(pdf, category, adventure_slug)
+
+
+# ── Main ───────────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    ensure_collection()
+
+    # Core rulebooks (PHB, DMG, MM) — shared across all adventures
     core_dir = BOOKS_DIR / "core"
     if core_dir.exists():
-        print(f"\nProcessing Core Rulebooks in {core_dir}")
-        for pdf_path in sorted(core_dir.glob("*.pdf")):
-            process_file(pdf_path, category="core", adventure_slug=None)
+        ingest_directory(core_dir, category="core")
     else:
-        print(f"No core directory found at {core_dir}")
+        print(f"⚠️  Core directory not found: {core_dir}")
 
+    # Adventure modules — folder name becomes the adventure slug
     adventures_dir = BOOKS_DIR / "adventures"
     if adventures_dir.exists():
-        print(f"\nProcessing Adventures in {adventures_dir}")
-        for adv_folder in sorted(adventures_dir.iterdir()):
-            if adv_folder.is_dir():
-                slug = adv_folder.name
-                print(f"\n--- Adventure: {slug} ---")
-                for pdf_path in sorted(adv_folder.glob("*.pdf")):
-                    process_file(pdf_path, category="adventure", adventure_slug=slug)
+        for adventure_dir in sorted(adventures_dir.iterdir()):
+            if adventure_dir.is_dir():
+                ingest_directory(
+                    adventure_dir,
+                    category="adventure",
+                    adventure_slug=adventure_dir.name,
+                )
     else:
-        print(f"No adventures directory found at {adventures_dir}")
+        print(f"⚠️  Adventures directory not found: {adventures_dir}")
 
-    print("\n🎲 Ingestion complete!")
+    print("\n✅ Ingestion complete.")
 
 
 if __name__ == "__main__":
-    ingest_books()
+    main()

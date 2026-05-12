@@ -32,7 +32,7 @@ The app supports multiple official D&D adventures. Each adventure has its own kn
 | Adventure                     | Setting                     | Levels | Status         |
 | ----------------------------- | --------------------------- | ------ | -------------- |
 | Lost Mine of Phandelver       | Phandalin, Forgotten Realms | 1–5    | ✅ Available   |
-| Ghosts of Saltmarsh           | Saltmarsh, Greyhawk         | 1–12   | 🔲 Coming soon |
+| Ghosts of Saltmarsh           | Saltmarsh, Greyhawk         | 1–12   | ✅ Available   |
 | Tales from the Yawning Portal | Waterdeep + various         | 1–15   | 🔲 Coming soon |
 
 ### Source Documents
@@ -76,7 +76,7 @@ scripts/books/
     tales-from-the-yawning-portal/
 ```
 
-Each PDF is parsed, chunked into ~500 character sections with 100-character overlap, and converted into vector embeddings via Ollama. Chunks are stored in Supabase with `pgvector`, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
+Each PDF is parsed, chunked into ~1000 character sections with 100-character overlap, and converted into vector embeddings via Ollama. Chunks are stored in Supabase with `pgvector`, tagged with their source document's `category` (`core` or `adventure`) and `adventure_slug`. This tagging enables scoped RAG retrieval — each session only searches chunks from its own adventure plus the core rulebooks.
 
 Run ingestion once per new book:
 
@@ -473,7 +473,7 @@ Expand on your ingestion section:
 
 ### Chunking Strategy
 
-- Default: ~500 characters with 100-character overlap
+- Default: ~1000 characters with 100-character overlap
 - D&D-aware splitting via `DndTextSplitter`
 - Preserves tables and structured content
 - Tags chunks with `category` and `adventure_slug`

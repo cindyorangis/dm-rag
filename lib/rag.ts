@@ -1,4 +1,3 @@
-import { supabaseAdmin } from "@/lib/supabase";
 import { CohereClient } from "cohere-ai";
 
 let _cohereClient: CohereClient | null = null;
@@ -10,6 +9,121 @@ function getCohereClient(): CohereClient {
     _cohereClient = new CohereClient({ token });
   }
   return _cohereClient;
+}
+
+// ── Qdrant client ──────────────────────────────────────────────────────────
+
+const QDRANT_URL = process.env.QDRANT_URL!;
+const QDRANT_API_KEY = process.env.QDRANT_API_KEY!;
+const COLLECTION = process.env.QDRANT_COLLECTION ?? "dnd_chunks";
+
+async function qdrantSearch(params: {
+  vector: number[];
+  filter: Record<string, unknown>;
+  limit: number;
+  withPayload?: boolean;
+}): Promise<QdrantPoint[]> {
+  const res = await fetch(
+    `${QDRANT_URL}/collections/${COLLECTION}/points/search`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": QDRANT_API_KEY,
+      },
+      body: JSON.stringify({
+        vector: params.vector,
+        filter: params.filter,
+        limit: params.limit,
+        with_payload: params.withPayload ?? true,
+        with_vector: false,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(`Qdrant search error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return data.result as QdrantPoint[];
+}
+
+async function qdrantKeywordSearch(params: {
+  query: string;
+  filter: Record<string, unknown>;
+  limit: number;
+}): Promise<QdrantPoint[]> {
+  // Qdrant full-text search via scroll + payload filter on content field.
+  // Requires a full-text index on "content" — create once in Qdrant Cloud console:
+  //   PUT /collections/dnd_chunks/index
+  //   { "field_name": "content", "field_schema": "text" }
+  const res = await fetch(
+    `${QDRANT_URL}/collections/${COLLECTION}/points/scroll`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": QDRANT_API_KEY,
+      },
+      body: JSON.stringify({
+        filter: {
+          must: [
+            ...((params.filter as any).should
+              ? [{ should: (params.filter as any).should }]
+              : []),
+            {
+              key: "content",
+              match: { text: params.query },
+            },
+          ],
+        },
+        limit: params.limit,
+        with_payload: true,
+        with_vector: false,
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Qdrant keyword search error: ${res.status} ${await res.text()}`,
+    );
+  }
+
+  const data = await res.json();
+  // scroll returns { result: { points: [...], next_page_offset } }
+  return (data.result?.points ?? []) as QdrantPoint[];
+}
+
+interface QdrantPoint {
+  id: string;
+  score?: number; // present on /search, absent on /scroll
+  payload: {
+    content: string;
+    source: string;
+    category: "core" | "adventure";
+    adventure_slug: string;
+    chunk_index: number;
+  };
+}
+
+/**
+ * Qdrant filter scoped to core rulebooks OR the active adventure module.
+ * Mirrors the original `match_chunks_scoped` Supabase RPC behaviour.
+ */
+function scopedFilter(adventureSlug: string): Record<string, unknown> {
+  return {
+    should: [
+      { key: "category", match: { value: "core" } },
+      {
+        must: [
+          { key: "category", match: { value: "adventure" } },
+          { key: "adventure_slug", match: { value: adventureSlug } },
+        ],
+      },
+    ],
+  };
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -110,14 +224,17 @@ export async function performVectorSearch(
     throw error;
   }
 
-  const { data, error } = await supabaseAdmin.rpc("match_chunks_scoped", {
-    query_embedding: embedding,
-    adventure_slug: adventureSlug,
-    match_count: matchCount,
+  const results = await qdrantSearch({
+    vector: embedding,
+    filter: scopedFilter(adventureSlug),
+    limit: matchCount,
   });
 
-  if (error) throw new Error(`Vector search failed: ${error.message}`);
-  return (data as VectorSearchResult[]) || [];
+  return results.map((r) => ({
+    id: String(r.id),
+    content: r.payload.content,
+    similarity: r.score ?? 0,
+  }));
 }
 
 export async function calculateKeywordScores(
@@ -125,22 +242,24 @@ export async function calculateKeywordScores(
   adventureSlug: string,
   matchCount: number,
 ): Promise<KeywordSearchResult[]> {
-  const { data, error } = await supabaseAdmin.rpc(
-    "match_chunks_scoped_keywords",
-    {
-      query_embedding: null,
-      adventure_slug: adventureSlug,
-      query_text: query,
-      match_count: matchCount,
-    },
-  );
+  try {
+    const results = await qdrantKeywordSearch({
+      query,
+      filter: scopedFilter(adventureSlug),
+      limit: matchCount,
+    });
 
-  if (error) {
+    // Scroll results have no relevance score — assign 1.0 since they already
+    // passed the text match filter. Cohere re-ranking differentiates them downstream.
+    return results.map((r) => ({
+      id: String(r.id),
+      score: 1.0,
+      content: r.payload.content,
+    }));
+  } catch (error) {
     console.warn("Keyword search unavailable, using vector fallback:", error);
     return [];
   }
-
-  return (data as KeywordSearchResult[]) || [];
 }
 
 // ── Retrieval ──────────────────────────────────────────────────────────────
@@ -151,7 +270,7 @@ export async function calculateKeywordScores(
  *
  * All splitting happens at ingestion time (scripts/ingest.py +
  * scripts/dnd_splitters.py). This function only reads pre-chunked rows
- * from Supabase.
+ * from Qdrant.
  */
 export async function retrieveChunks(
   query: string,
@@ -299,8 +418,8 @@ export async function retrieveChunks(
 // ── Re-ranking ─────────────────────────────────────────────────────────────
 
 /**
- * Re-ranks a result set. Currently uses the existing similarity score as
- * a proxy. Replace with a cross-encoder for production.
+ * Re-ranks a result set using Cohere rerank-english-v3.0.
+ * Falls back to blended score order if Cohere is unavailable.
  */
 export async function rerankResults(
   query: string,
@@ -425,6 +544,8 @@ export function calculateRetrievalConfidence(params: {
     maxSimilarity: round(maxSimilarity),
   };
 }
+
+// ── Utilities ──────────────────────────────────────────────────────────────
 
 function normalizeByMinMax(values: number[]): number[] {
   if (values.length === 0) return [];
